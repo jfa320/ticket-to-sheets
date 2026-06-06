@@ -1,0 +1,229 @@
+:root {
+    --bg: #f6efe4;
+    --bg-strong: #ead8bd;
+    --ink: #1b1f18;
+    --muted: #586255;
+    --panel: rgba(255, 251, 245, 0.88);
+    --line: rgba(46, 56, 38, 0.12);
+    --accent: #1f6b53;
+    --accent-strong: #114635;
+    --shadow: 0 24px 80px rgba(71, 48, 16, 0.12);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: "Manrope", sans-serif;
+    color: var(--ink);
+    background:
+            radial-gradient(circle at top left, rgba(255, 255, 255, 0.7), transparent 35%),
+            radial-gradient(circle at right 15%, rgba(31, 107, 83, 0.16), transparent 25%),
+            linear-gradient(135deg, var(--bg), var(--bg-strong));
+}
+
+.shell {
+    width: min(1100px, calc(100% - 32px));
+    margin: 0 auto;
+    padding: 48px 0 64px;
+}
+
+.hero {
+    margin-bottom: 28px;
+}
+
+.eyebrow {
+    margin: 0 0 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-size: 0.8rem;
+    color: var(--accent-strong);
+    font-weight: 800;
+}
+
+h1,
+h2,
+button {
+    font-family: "Space Grotesk", sans-serif;
+}
+
+h1 {
+    margin: 0;
+    max-width: 760px;
+    font-size: clamp(2.1rem, 4vw, 4rem);
+    line-height: 0.98;
+}
+
+.lead {
+    max-width: 720px;
+    margin: 16px 0 0;
+    color: var(--muted);
+    font-size: 1.05rem;
+}
+
+.panel {
+    background: var(--panel);
+    backdrop-filter: blur(10px);
+    border: 1px solid var(--line);
+    border-radius: 24px;
+    box-shadow: var(--shadow);
+}
+
+.uploader {
+    padding: 24px;
+}
+
+.dropzone {
+    display: block;
+    padding: 40px 28px;
+    border-radius: 20px;
+    border: 2px dashed rgba(31, 107, 83, 0.35);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(248, 241, 229, 0.9));
+    cursor: pointer;
+}
+
+.dropzone input {
+    display: none;
+}
+
+.dropzone-title {
+    display: block;
+    font-weight: 800;
+    font-size: 1.1rem;
+}
+
+.dropzone-hint {
+    display: block;
+    margin-top: 8px;
+    color: var(--muted);
+}
+
+button {
+    margin-top: 18px;
+    border: 0;
+    border-radius: 999px;
+    padding: 14px 22px;
+    font-weight: 700;
+    font-size: 1rem;
+    cursor: pointer;
+    background: var(--accent);
+    color: #fff;
+    transition: transform 160ms ease, background 160ms ease;
+}
+
+button:hover {
+    transform: translateY(-1px);
+    background: var(--accent-strong);
+}
+
+button:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+    transform: none;
+    background: var(--muted);
+}
+
+.status {
+    margin: 14px 6px 0;
+    color: var(--muted);
+}
+
+.results {
+    margin-top: 26px;
+    display: grid;
+    gap: 18px;
+}
+
+.hidden {
+    display: none;
+}
+
+.meta-grid {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    padding: 18px;
+}
+
+.meta-grid article {
+    padding: 16px;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.55);
+    border: 1px solid var(--line);
+}
+
+.meta-label {
+    display: block;
+    color: var(--muted);
+    font-size: 0.85rem;
+    margin-bottom: 6px;
+}
+
+.actions {
+    padding: 18px;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.actions button {
+    margin-top: 0;
+}
+
+.output-block {
+    padding: 18px;
+}
+
+.output-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: baseline;
+    margin-bottom: 12px;
+}
+
+.output-header h2 {
+    margin: 0;
+    font-size: 1.05rem;
+}
+
+.output-header span {
+    color: var(--muted);
+    font-size: 0.9rem;
+}
+
+textarea {
+    width: 100%;
+    min-height: 220px;
+    resize: vertical;
+    border-radius: 16px;
+    border: 1px solid var(--line);
+    padding: 16px;
+    font-family: "Courier New", monospace;
+    font-size: 0.95rem;
+    background: rgba(255, 255, 255, 0.88);
+}
+
+.raw-block textarea {
+    min-height: 180px;
+}
+
+@media (max-width: 720px) {
+    .shell {
+        width: min(100% - 20px, 1100px);
+        padding-top: 24px;
+    }
+
+    .uploader,
+    .output-block,
+    .actions {
+        padding: 16px;
+    }
+
+    .output-header {
+        flex-direction: column;
+    }
+}

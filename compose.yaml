@@ -1,0 +1,21 @@
+services:
+  paddleocr:
+    build:
+      context: .
+      dockerfile: ocr/Dockerfile
+    container_name: facturas-paddleocr
+    environment:
+      OCR_DEFAULT_LANGUAGE: es
+      FLAGS_use_mkldnn: "0"
+      FLAGS_use_onednn: "0"
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      NUMEXPR_NUM_THREADS: "1"
+    ports:
+      - "5000:5000"
+    volumes:
+      - paddleocr-cache:/root/.paddleocr
+
+volumes:
+  paddleocr-cache:
