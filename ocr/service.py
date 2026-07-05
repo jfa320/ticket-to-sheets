@@ -192,32 +192,37 @@ def crop_receipt_region(image):
 
 
 def build_variants(image):
-    base = crop_receipt_region(image.convert("RGB"))
-    base = limit_image_size(base, 1400)
     variants = []
+    source = image.convert("RGB")
 
-    variants.append(("cropped-original", base))
+    for rotation in (0, 90, 270, 180):
+        oriented = source if rotation == 0 else source.rotate(rotation, expand=True)
+        base = crop_receipt_region(oriented)
+        base = limit_image_size(base, 1400)
+        suffix = "original" if rotation == 0 else f"rot{rotation}"
 
-    gray = ImageOps.grayscale(base)
-    variants.append(("gray", gray))
+        variants.append((f"cropped-{suffix}", base))
 
-    contrast = ImageEnhance.Contrast(gray).enhance(2.3)
-    sharp = ImageEnhance.Sharpness(contrast).enhance(2.0)
-    enlarged = limit_image_size(sharp.resize((sharp.width * 2, sharp.height * 2), Image.Resampling.LANCZOS), 1800)
-    variants.append(("enhanced", enlarged))
+        gray = ImageOps.grayscale(base)
+        variants.append((f"gray-{suffix}", gray))
 
-    threshold = enlarged.point(lambda pixel: 255 if pixel > 172 else 0, mode="1").convert("L")
-    variants.append(("threshold", threshold))
+        contrast = ImageEnhance.Contrast(gray).enhance(2.3)
+        sharp = ImageEnhance.Sharpness(contrast).enhance(2.0)
+        enlarged = limit_image_size(sharp.resize((sharp.width * 2, sharp.height * 2), Image.Resampling.LANCZOS), 1800)
+        variants.append((f"enhanced-{suffix}", enlarged))
 
-    denoised = enlarged.filter(ImageFilter.MedianFilter(size=3))
-    variants.append(("denoised", denoised))
+        threshold = enlarged.point(lambda pixel: 255 if pixel > 172 else 0, mode="1").convert("L")
+        variants.append((f"threshold-{suffix}", threshold))
 
-    light_threshold = denoised.point(lambda pixel: 255 if pixel > 150 else 0, mode="1").convert("L")
-    variants.append(("light-threshold", light_threshold))
+        denoised = enlarged.filter(ImageFilter.MedianFilter(size=3))
+        variants.append((f"denoised-{suffix}", denoised))
 
-    small = limit_image_size(base, 900)
-    variants.append(("small-original", small))
-    variants.append(("small-gray", ImageOps.grayscale(small)))
+        light_threshold = denoised.point(lambda pixel: 255 if pixel > 150 else 0, mode="1").convert("L")
+        variants.append((f"light-threshold-{suffix}", light_threshold))
+
+        small = limit_image_size(base, 900)
+        variants.append((f"small-{suffix}", small))
+        variants.append((f"small-gray-{suffix}", ImageOps.grayscale(small)))
 
     return variants
 
@@ -240,8 +245,13 @@ def score_lines(lines):
     lower = text.lower()
     score = len(lines) * 4 + sum(len(line["text"]) for line in lines) / 30
 
-    if any(token in lower for token in ["fecha", "total", "subtotal"]):
-        score += 10
+    for token in ["fecha", "total", "subtotal", "supermercado", "corazones", "consumidor"]:
+        if token in lower:
+            score += 8
+
+    for token in ["serenisima", "elegante", "higienol", "frutigran", "union", "vocacion", "papel", "salchich"]:
+        if token in lower:
+            score += 10
     if any(char.isdigit() for char in text):
         score += 6
 
@@ -297,6 +307,9 @@ def run_best_ocr(image, language):
 
     if best_score < 0:
         raise RuntimeError("PaddleOCR fallo en todas las variantes de imagen. Revisa tamaño/formato de la foto.")
+
+    preview = " | ".join(line["text"] for line in best_lines[:12])
+    app.logger.info("Selected OCR variant '%s' with score %.2f and %d lines: %s", best_name, best_score, len(best_lines), preview)
 
     return best_name, best_lines
 

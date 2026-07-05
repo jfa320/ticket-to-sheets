@@ -23,7 +23,10 @@ public class BrandCatalog {
     private final ObjectMapper objectMapper;
     private final Path catalogPath;
     private final Set<String> brands = new LinkedHashSet<>();
-    private static final Set<String> IGNORED_BRANDS = Set.of("almacen", "generico", "sin marca", "supermercado", "zou wenguo");
+    private static final Set<String> IGNORED_BRANDS = Set.of(
+            "almacen", "generico", "sin marca", "supermercado", "zou wenguo", "onsumidorley", "consumidor",
+            "bolsa", "bahia", "levadura", "s p coctel", "su a"
+    );
 
     @Autowired
     public BrandCatalog(ObjectMapper objectMapper) {
@@ -44,6 +47,18 @@ public class BrandCatalog {
                 .flatMap(brand -> aliasesFor(brand).stream()
                         .map(alias -> new BrandMatch(brand, normalize(alias))))
                 .filter(match -> startsWithAlias(normalizedDescription, compactDescription, match.normalizedAlias()))
+                .max(Comparator.comparingInt(match -> compact(match.normalizedAlias()).length()));
+    }
+
+    public synchronized Optional<BrandMatch> findAnywhereIn(String description) {
+        String normalizedDescription = normalize(description);
+        String compactDescription = compact(normalizedDescription);
+
+        return brands.stream()
+                .flatMap(brand -> aliasesFor(brand).stream()
+                        .map(alias -> new BrandMatch(brand, normalize(alias))))
+                .filter(match -> normalizedDescription.contains(match.normalizedAlias())
+                        || compactDescription.contains(compact(match.normalizedAlias())))
                 .max(Comparator.comparingInt(match -> compact(match.normalizedAlias()).length()));
     }
 

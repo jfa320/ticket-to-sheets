@@ -32,7 +32,7 @@ class ReceiptParserServiceTest {
 
         assertEquals("Los Tres Corazones", response.storeName());
         assertEquals("4/3/2026", response.date());
-        assertEquals(3, response.itemCount());
+        assertEquals(3, response.itemCount(), response.csv());
         assertTrue(response.csv().contains("Liqui 800ml|Querubin|Los Tres Corazones"));
         assertTrue(response.tsvWithoutHeader().startsWith("Liqui 800ml\tQuerubin\tLos Tres Corazones"));
         assertTrue(response.tsvWithoutHeader().contains("2400,00\t4/3/2026"));
@@ -141,5 +141,145 @@ class ReceiptParserServiceTest {
         assertEquals("Los Tres Corazones", response.storeName());
         assertEquals(1, response.itemCount());
         assertTrue(response.csv().contains("Queso cremoso 1un|Punta del agua|Los Tres Corazones|Supermercado|1|3097,50|2/6/2026"));
+    }
+
+    @Test
+    void preferReceiptDateAndExpandMorenitaManzanilla() {
+        String raw = """
+                LOS SUPERMERCADO
+                TRES CORAZONES
+                Inicio de Actividades: 01/02/2007
+                Fecha 07/06/2026 Hora 13:42:06
+                MORENITA MANZAN*20UN 1100,00
+                TOTAL 1100,00
+                """;
+
+        ExtractResponse response = parserService.parse(raw);
+
+        assertEquals("Los Tres Corazones", response.storeName());
+        assertEquals("7/6/2026", response.date());
+        assertEquals(1, response.itemCount());
+        assertTrue(response.csv().contains("Manzanilla 20un|Morenita|Los Tres Corazones|Supermercado|1|1100,00|7/6/2026"));
+    }
+
+    @Test
+    void ignoreBusinessStartDateEvenWhenReceiptDateUsesShortYear() {
+        String raw = """
+                ZOU WENGUC
+                Inicio de Actividades:
+                01/02/2007
+                Fecha 10/06/26
+                PITUSAS GALLET*300GR (21) 2100,00
+                TOTAL 2100,00
+                """;
+
+        ExtractResponse response = parserService.parse(raw);
+
+        assertEquals("Los Tres Corazones", response.storeName());
+        assertEquals("10/6/2026", response.date());
+        assertTrue(response.csv().contains("Galletitas 300gr|Pitusas|Los Tres Corazones|Supermercado|1|2100,00|10/6/2026"));
+    }
+
+    @Test
+    void parseTiendaFilipaTicketWithMoneyBeforeAndAfterDescription() {
+        String raw = """
+                TIENDA FILIPA S.R.L.
+                LUNES A SABADOS DE 9HS.A20HS
+                WHATSAPP:11-2358-1877
+                TICKET # YNT-00337183
+                FECHA YHORA:13/06/202611:56
+                CLIENTE:CONSUMIDOR FINAL
+                CANTIDAD/PRECIO UNIT
+                DESCRIPC.ION IMPORTE
+                1.0000x$2.400.00
+                CUMANA MIX DE SEMILLAS DE 1.0000 $2.800.00 $2.400.00
+                NISINSALX500GR 1.0000x$5.800.00 $2.800,00
+                1.000x$60,00 LA FRANCIA.PAN MULTICEREA $5.800.00
+                BOLSA VERDE $60.00
+                SUBTOTAL. DESCUENTO $11.060.00
+                TOTAL $11.060,00 $0,00
+                MUCHAS GRACIAS!
+                """;
+
+        ExtractResponse response = parserService.parse(raw);
+
+        assertEquals("Tienda Filipa", response.storeName());
+        assertEquals("13/6/2026", response.date());
+        assertTrue(response.csv().contains("Mix de semillas|Cumana|Tienda Filipa|Supermercado|1|2400,00|13/6/2026"), response.csv());
+        assertTrue(response.csv().contains("Sal x500gr|Nisin|Tienda Filipa|Supermercado|1|2800,00|13/6/2026"), response.csv());
+        assertTrue(response.csv().contains("Pan multicereal|La Francia|Tienda Filipa|Supermercado|1|5800,00|13/6/2026"), response.csv());
+    }
+
+    @Test
+    void parsePedidosYaMarketScreenshotOcr() {
+        String raw = """
+                PedidosYa Market - San Miguel II
+                Cambio de peso
+                Cebolla Selección
+                $ 800,02
+                15% OFF
+                1kg 0.9 kg
+                Agua Mineral Sierra De Los Padres Sin Gas 2 L
+                $ 1.572,50 $1.850
+                15% OFF
+                1x
+                Papas Air Fryer Mc Cain Más Finitas 700 g
+                $ 11.470,80 $19.118
+                2DA AL 80% OFF
+                2x
+                Yogur Tregar Natural Entero Sin Azúcar 280 g
+                $ 3.849
+                1x
+                Harina De Trigo Morixe 000 1 kg
+                $ 999
+                1x
+                Leche Tregar Entera 3% Larga Vida 1 L
+                $ 3.105,70 $4.778
+                2x
+                Queso Rallado La Paulina Tradicional 150 g
+                $ 5.082,15 $5.979
+                1x
+                """;
+
+        ExtractResponse response = parserService.parse(raw);
+
+        assertEquals("Pedidosya Market - San Miguel Ii", response.storeName());
+        assertTrue(response.csv().contains("Cebolla|Generico|Pedidosya Market - San Miguel Ii|Supermercado|0.9|888,91|"), response.csv());
+        assertTrue(response.csv().contains("Agua mineral 2|Sierra De Los Padres|Pedidosya Market - San Miguel Ii|Supermercado|1|1572,50|"), response.csv());
+        assertTrue(response.csv().contains("Papas 700|McCain|Pedidosya Market - San Miguel Ii|Supermercado|2|5735,40|"), response.csv());
+        assertTrue(response.csv().contains("Yogur 280|Tregar|Pedidosya Market - San Miguel Ii|Supermercado|1|3849,00|"), response.csv());
+        assertTrue(response.csv().contains("Harina 000 1|Morixe|Pedidosya Market - San Miguel Ii|Supermercado|1|999,00|"), response.csv());
+        assertTrue(response.csv().contains("Leche 3 1|Tregar|Pedidosya Market - San Miguel Ii|Supermercado|2|1552,85|"), response.csv());
+        assertTrue(response.csv().contains("Queso rallado 150|La Paulina|Pedidosya Market - San Miguel Ii|Supermercado|1|5082,15|"), response.csv());
+    }
+
+    @Test
+    void parseCompactPedidosYaOcrLines() {
+        String raw = """
+                PedidosYa Market - San Miguel II
+                Cebolla Seleccion $800.02 1g0.9 kg
+                15XOFF
+                Agua Mineral Sierra De Los Padres Sin Gas 2 L $1.572,50 $4850 1x
+                15%OFF
+                $11.47080 8 Papas Air Fryer Mc Cain Mas Finitas 700 g 2x
+                2DA.AL80XOFF
+                Yogur Tregar Natural Entero Sin Azücar 280 g $3.849 1x
+                Harina De Trigo Morixe 0001 kg $999 1x
+                Leche Tregar Entera 3% Larga Vida 1 L $3.105,70 $4778 2x
+                2DA.AL70XOFF
+                Queso Rallado La Paulina Tradicional 150 g $5.082,15$5.979 1x
+                """;
+
+        ExtractResponse response = parserService.parse(raw);
+
+        assertEquals("Pedidosya Market - San Miguel Ii", response.storeName());
+        assertEquals(7, response.itemCount(), response.csv());
+        assertTrue(response.csv().contains("Cebolla|Generico|Pedidosya Market - San Miguel Ii|Supermercado|0.9|888,91|"), response.csv());
+        assertTrue(response.csv().contains("Agua mineral 2|Sierra De Los Padres|Pedidosya Market - San Miguel Ii|Supermercado|1|1572,50|"), response.csv());
+        assertTrue(response.csv().contains("Papas 700|McCain|Pedidosya Market - San Miguel Ii|Supermercado|2|5735,40|"), response.csv());
+        assertTrue(response.csv().contains("Yogur 280|Tregar|Pedidosya Market - San Miguel Ii|Supermercado|1|3849,00|"), response.csv());
+        assertTrue(response.csv().contains("Harina 0001|Morixe|Pedidosya Market - San Miguel Ii|Supermercado|1|999,00|"), response.csv());
+        assertTrue(response.csv().contains("Leche 3 1|Tregar|Pedidosya Market - San Miguel Ii|Supermercado|2|1552,85|"), response.csv());
+        assertTrue(response.csv().contains("Queso rallado 150|La Paulina|Pedidosya Market - San Miguel Ii|Supermercado|1|5082,15|"), response.csv());
     }
 }

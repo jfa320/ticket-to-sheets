@@ -44,7 +44,7 @@ public final class DelimitedExporter {
                     escape(item.marca(), delimiter),
                     escape(item.lugarDeCompra(), delimiter),
                     escape(item.categoria(), delimiter),
-                    String.valueOf(item.cantidad()),
+                    escape(item.cantidad(), delimiter),
                     escape(item.precioUnitario(), delimiter),
                     escape(item.fecha(), delimiter)
             ));

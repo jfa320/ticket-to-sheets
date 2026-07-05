@@ -1,0 +1,38 @@
+# Java / Maven build output
+target/
+*.class
+*.jar
+*.war
+*.ear
+
+# Logs and runtime output
+*.log
+*.err.log
+hs_err_pid*
+replay_pid*
+
+# Python OCR service local artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# IDE and OS files
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+desktop.ini

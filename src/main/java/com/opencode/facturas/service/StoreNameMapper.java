@@ -53,7 +53,16 @@ public class StoreNameMapper {
         }
         String compactCandidate = normalizedCandidate.replace(" ", "");
 
-        if (normalizedCandidate.contains("zou wenguo") || compactCandidate.contains("zouwenguo")) {
+        if (normalizedCandidate.contains("zou wenguo")
+                || normalizedCandidate.contains("zou wenguc")
+                || compactCandidate.contains("zouwenguo")
+                || compactCandidate.contains("zouwenguc")) {
+            return "Los Tres Corazones";
+        }
+        if (normalizedCandidate.contains("los tres corazones")
+                || normalizedCandidate.contains("tres corazones")
+                || compactCandidate.contains("lostrescorazones")
+                || compactCandidate.contains("trescorazones")) {
             return "Los Tres Corazones";
         }
 

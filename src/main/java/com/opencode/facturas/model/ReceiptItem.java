@@ -5,7 +5,7 @@ public record ReceiptItem(
         String marca,
         String lugarDeCompra,
         String categoria,
-        int cantidad,
+        String cantidad,
         String precioUnitario,
         String fecha,
         String precioTotal
