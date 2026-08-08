@@ -1,4 +1,19 @@
 services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: facturas-app
+    environment:
+      APP_OCR_ENDPOINT: http://paddleocr:5000/ocr
+      APP_OCR_HEALTH_ENDPOINT: http://paddleocr:5000/health
+      APP_OCR_LANGUAGE: es
+    ports:
+      - "8080:8080"
+    depends_on:
+      - paddleocr
+    restart: unless-stopped
+
   paddleocr:
     build:
       context: .
@@ -12,10 +27,14 @@ services:
       OPENBLAS_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
       NUMEXPR_NUM_THREADS: "1"
-    ports:
-      - "5000:5000"
+      APP_OCR_DEBUG: ${APP_OCR_DEBUG:-false}
+      OCR_DEBUG_DIR: /app/debug
+    expose:
+      - "5000"
     volumes:
       - paddleocr-cache:/root/.paddleocr
+      - ./debug:/app/debug
+    restart: unless-stopped
 
 volumes:
   paddleocr-cache:

@@ -19,9 +19,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY ocr/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --default-timeout=180 --retries=5 -r requirements.txt
 
 COPY ocr/service.py ./service.py
+COPY ocr/preprocess.py ./preprocess.py
+COPY ocr/tests ./tests
 
 EXPOSE 5000
 

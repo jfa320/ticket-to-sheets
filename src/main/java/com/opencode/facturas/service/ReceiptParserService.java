@@ -29,6 +29,7 @@ public class ReceiptParserService {
     private static final Pattern PRICE_AT_END_PATTERN = Pattern.compile("(.+?)\\s+(\\d+(?:[\\.,]\\d{3})*[\\.,]\\d{2})$");
     private static final Pattern PUNTA_DE_AGUA_CREMOSO_PATTERN = Pattern.compile("(?i).*?(PUNTA\\s+DE\\s+AGUA\\s+CR\\s*\\*?\\s*1UN)\\s+(\\d+(?:[\\.,]\\d{3})*[\\.,]\\d{2}).*");
     private static final Pattern PRICE_ONLY_PATTERN = Pattern.compile("^(\\d+(?:[\\.,]\\d{3})*[\\.,]\\d{2})$");
+    private static final Pattern NUMBER_TOKEN_PATTERN = Pattern.compile("\\d+(?:[\\.,]\\d+)*");
     private static final Pattern MULTIPLIER_PATTERN = Pattern.compile("(?i)\\b(\\d+)\\s*[xX]\\s*(\\d+(?:[\\.,]\\d{3})*[\\.,]\\d{2})\\b");
     private static final List<String> STOP_WORDS = List.of("subtotal", "total", "recibi", "cambio", "tarjeta", "efectivo");
     private static final List<String> METADATA_WORDS = List.of(
@@ -86,7 +87,10 @@ public class ReceiptParserService {
 
         String date = normalizeDate(extractDate(lines).orElse(""));
         String storeName = storeNameMapper.resolve(lines, detectStoreName(lines));
-        List<ReceiptItem> items = isPedidosYa(lines) ? extractPedidosYaItems(lines, storeName, date) : extractItems(lines, storeName, date);
+        List<String> warnings = new ArrayList<>();
+        List<ReceiptItem> items = isPedidosYa(lines)
+                ? extractPedidosYaItems(lines, storeName, date, warnings)
+                : extractItems(lines, storeName, date, warnings);
 
         return new ExtractResponse(
                 storeName,
@@ -96,43 +100,56 @@ public class ReceiptParserService {
                 DelimitedExporter.toTabSeparated(items),
                 DelimitedExporter.toTabSeparatedWithoutHeader(items),
                 rawText,
-                items
+                items,
+                null,
+                null,
+                warnings
         );
     }
 
-    private List<ReceiptItem> extractItems(List<String> lines, String storeName, String date) {
+    private List<ReceiptItem> extractItems(List<String> lines, String storeName, String date, List<String> warnings) {
         List<ReceiptItem> items = new ArrayList<>();
 
         for (int index = 0; index < lines.size(); index++) {
             String line = cleanOcrNoise(lines.get(index));
             String normalized = normalizeForDetection(line);
             if (shouldSkipLine(normalized)) {
+                if (PRICE_ONLY_PATTERN.matcher(line).matches()) {
+                    warnings.add("Precio sin descripción: " + line);
+                }
                 continue;
             }
 
             if (isLikelyDescriptionOnly(line, normalized) && index + 1 < lines.size()) {
                 String nextLine = cleanOcrNoise(lines.get(index + 1));
                 if (PRICE_ONLY_PATTERN.matcher(nextLine).matches() && isLikelyProductLine(line, normalized)) {
-                    items.add(buildItem(line, nextLine, storeName, date));
+                    items.add(buildItem(line, nextLine, storeName, date, isAmbiguousLine(line, normalized)));
                     index++;
                     continue;
                 }
             }
 
             if (PRICE_ONLY_PATTERN.matcher(line).matches()) {
+                warnings.add("Precio sin descripción: " + line);
                 continue;
             }
 
             Matcher puntaDeAguaMatcher = PUNTA_DE_AGUA_CREMOSO_PATTERN.matcher(line);
             if (puntaDeAguaMatcher.matches()) {
-                items.add(buildItem(puntaDeAguaMatcher.group(1), puntaDeAguaMatcher.group(2), storeName, date));
+                items.add(buildItem(puntaDeAguaMatcher.group(1), puntaDeAguaMatcher.group(2), storeName, date,
+                        isAmbiguousLine(line, normalized)));
                 continue;
             }
 
             Optional<ParsedItemLine> parsedItemLine = parseItemLineWithMoney(line);
             if (parsedItemLine.isPresent() && isLikelyProductLine(parsedItemLine.get().description(), normalized)) {
-                items.add(buildItem(parsedItemLine.get().description(), parsedItemLine.get().price(), storeName, date));
+                items.add(buildItem(parsedItemLine.get().description(), parsedItemLine.get().price(), storeName, date,
+                        isAmbiguousLine(line, normalized)));
                 continue;
+            }
+
+            if (parsedItemLine.isPresent()) {
+                warnings.add("Línea de producto descartada: " + line);
             }
 
             Matcher matcher = PRICE_AT_END_PATTERN.matcher(line);
@@ -143,20 +160,22 @@ public class ReceiptParserService {
             String rawDescription = matcher.group(1).trim();
             String rawPrice = matcher.group(2).trim();
             if (rawDescription.length() < 3) {
+                warnings.add("Descripción demasiado corta: " + line);
                 continue;
             }
 
             if (!isLikelyProductLine(rawDescription, normalized)) {
+                warnings.add("Línea de producto descartada: " + line);
                 continue;
             }
 
-            items.add(buildItem(rawDescription, rawPrice, storeName, date));
+            items.add(buildItem(rawDescription, rawPrice, storeName, date, isAmbiguousLine(line, normalized)));
         }
 
         return items;
     }
 
-    private ReceiptItem buildItem(String rawDescription, String rawPrice, String storeName, String date) {
+    private ReceiptItem buildItem(String rawDescription, String rawPrice, String storeName, String date, boolean ambiguous) {
         int quantity = detectQuantity(rawDescription);
         double totalPrice = parseAmount(rawPrice);
         double unitPrice = quantity > 0 ? totalPrice / quantity : totalPrice;
@@ -173,17 +192,20 @@ public class ReceiptParserService {
                 String.valueOf(quantity),
                 formatAmount(unitPrice),
                 normalizeDate(date),
-                ""
+                ambiguous ? "AMBIGUOUS" : "CORRECT"
         );
     }
 
     private boolean isPedidosYa(List<String> lines) {
         return lines.stream()
                 .map(this::normalizeForDetection)
-                .anyMatch(line -> line.contains("pedidosya") || line.contains("pedidos ya"));
+                .anyMatch(line -> line.contains("pedidosya")
+                        || line.contains("pedidos ya")
+                        || line.contains("podidosya")
+                        || (line.contains("market") && line.contains("pedido")));
     }
 
-    private List<ReceiptItem> extractPedidosYaItems(List<String> lines, String storeName, String date) {
+    private List<ReceiptItem> extractPedidosYaItems(List<String> lines, String storeName, String date, List<String> warnings) {
         List<ReceiptItem> items = new ArrayList<>();
 
         for (int index = 0; index < lines.size(); index++) {
@@ -192,7 +214,8 @@ public class ReceiptParserService {
             Optional<PedidosYaInlineItem> inlineItem = parsePedidosYaInlineItem(line, normalized);
             if (inlineItem.isPresent()) {
                 PedidosYaInlineItem item = inlineItem.get();
-                items.add(buildPedidosYaItem(item.description(), item.price(), item.quantity(), storeName, date));
+                items.add(buildPedidosYaItem(item.description(), item.price(), item.quantity(), storeName, date,
+                        isAmbiguousLine(line, normalized)));
                 continue;
             }
 
@@ -203,6 +226,9 @@ public class ReceiptParserService {
             PedidosYaProductLine productLine = splitPedidosYaQuantity(line);
             Optional<String> price = findPedidosYaPriceInFollowingLines(lines, index + 1);
             if (price.isEmpty()) {
+                if (shouldWarnPedidosYaMissingPrice(line, normalized)) {
+                    warnings.add("Producto posible sin precio: " + line);
+                }
                 continue;
             }
 
@@ -210,10 +236,32 @@ public class ReceiptParserService {
             if (quantity == null) {
                 quantity = findPedidosYaQuantityInFollowingLines(lines, index + 1).orElse("1");
             }
-            items.add(buildPedidosYaItem(productLine.description(), price.get(), quantity, storeName, date));
+            items.add(buildPedidosYaItem(productLine.description(), price.get(), quantity, storeName, date,
+                    isAmbiguousLine(line, normalized)));
         }
 
         return items;
+    }
+
+    private boolean shouldWarnPedidosYaMissingPrice(String line, String normalized) {
+        if (!isLikelyPedidosYaProductLine(line, normalized)
+                || normalized.contains("pedido")
+                || normalized.contains("pago")
+                || normalized.contains("medio")
+                || normalized.contains("detalle")
+                || normalized.contains("entrega")
+                || normalized.contains("timbre")
+                || normalized.contains("telefon")) {
+            return false;
+        }
+
+        if (MONEY_PATTERN.matcher(line).find()) {
+            return true;
+        }
+
+        return Pattern.compile("(?i)\\b\\d+(?:[\\.,]\\d+)?\\s*(?:x|kg|g|gr|ml|l|un|und|unidad(?:es)?)\\b")
+                .matcher(line)
+                .find();
     }
 
     private boolean isLikelyPedidosYaProductLine(String line, String normalized) {
@@ -224,6 +272,15 @@ public class ReceiptParserService {
             return false;
         }
         if (normalized.contains("cambio de peso") || normalized.contains("off") || normalized.contains("market")) {
+            return false;
+        }
+        if (normalized.contains("tu pedido")
+                || normalized.contains("tu pago")
+                || normalized.contains("medio de pago")
+                || normalized.contains("detalle sobre la entrega")
+                || normalized.contains("llamar por telefono")
+                || normalized.contains("timbre no funciona")
+                || normalized.contains("hrptt prdiac")) {
             return false;
         }
         return line.chars().filter(Character::isLetter).count() >= 4;
@@ -317,7 +374,7 @@ public class ReceiptParserService {
         return Optional.empty();
     }
 
-    private ReceiptItem buildPedidosYaItem(String rawDescription, String rawPrice, String quantity, String storeName, String date) {
+    private ReceiptItem buildPedidosYaItem(String rawDescription, String rawPrice, String quantity, String storeName, String date, boolean ambiguous) {
         String cleanedDescription = beautifyDescription(rawDescription);
         BrandMatch brandMatch = brandCatalog.findAnywhereIn(cleanedDescription)
                 .map(match -> new BrandMatch(match.brand(), match.normalizedAlias()))
@@ -335,8 +392,28 @@ public class ReceiptParserService {
                 quantity,
                 formatAmount(totalPrice / numericQuantity),
                 normalizeDate(date),
-                ""
+                ambiguous ? "AMBIGUOUS" : "CORRECT"
         );
+    }
+
+    private boolean isAmbiguousLine(String line, String normalized) {
+        Matcher numberMatcher = NUMBER_TOKEN_PATTERN.matcher(line);
+        int numberTokens = 0;
+        while (numberMatcher.find()) {
+            numberTokens++;
+        }
+        int priceCount = 0;
+        Matcher priceMatcher = MONEY_PATTERN.matcher(line);
+        while (priceMatcher.find()) {
+            priceCount++;
+        }
+
+        return DATE_PATTERN.matcher(normalized).find()
+                || normalized.contains("total")
+                || containsMetadata(normalized)
+                || line.length() > 60
+                || numberTokens > 3
+                || priceCount > 1;
     }
 
     private Optional<Double> parseQuantity(String quantity) {
@@ -407,6 +484,11 @@ public class ReceiptParserService {
         for (int i = 0; i < Math.min(lines.size(), 14); i++) {
             String line = cleanOcrNoise(lines.get(i));
             String normalized = normalizeForDetection(line);
+
+            if (normalized.contains("market")
+                    && (normalized.contains("pedidos") || normalized.contains("podidos"))) {
+                return "PedidosYa Market - San Miguel II";
+            }
 
             if (normalized.contains("supermercado") && i + 1 < lines.size()) {
                 String next = cleanOcrNoise(lines.get(i + 1));

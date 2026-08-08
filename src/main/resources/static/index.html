@@ -46,6 +46,45 @@
             </article>
         </div>
 
+        <div id="warningsPanel" class="panel warnings-panel hidden">
+            <div class="output-header">
+                <div>
+                    <h2>Advertencias para revisar</h2>
+                    <span>Son líneas que el parser no pudo confirmar con seguridad.</span>
+                </div>
+            </div>
+            <ul id="warningsList"></ul>
+        </div>
+
+        <div id="itemsEditor" class="panel editor-block">
+            <div class="output-header">
+                <div>
+                    <h2>Filas detectadas</h2>
+                    <span>Edita los campos necesarios antes de copiar.</span>
+                </div>
+            </div>
+            <p id="emptyItems" class="empty-items hidden">No se detectaron productos para revisar.</p>
+            <div class="table-scroll">
+                <table id="itemsTable">
+                    <thead>
+                    <tr>
+                        <th>Usar</th>
+                        <th>Descripción</th>
+                        <th>Marca</th>
+                        <th>Comercio</th>
+                        <th>Categoría</th>
+                        <th>Cantidad</th>
+                        <th>Unitario</th>
+                        <th>Fecha</th>
+                        <th>Estado</th>
+                        <th></th>
+                    </tr>
+                    </thead>
+                    <tbody id="itemsBody"></tbody>
+                </table>
+            </div>
+        </div>
+
         <div class="panel actions">
             <button id="copyPipe" type="button">Copiar formato con |</button>
             <button id="copyTsv" type="button">Copiar formato para Sheets</button>

@@ -2,6 +2,9 @@ package com.opencode.facturas.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.opencode.facturas.model.OcrDetection;
+import com.opencode.facturas.model.OcrLine;
+import com.opencode.facturas.model.OcrResult;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.rendering.ImageType;
@@ -29,7 +32,9 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 @Service
 public class OcrService {
@@ -59,6 +64,10 @@ public class OcrService {
     }
 
     public String extractText(MultipartFile file) {
+        return extract(file).text();
+    }
+
+    public OcrResult extract(MultipartFile file) {
         String filename = file.getOriginalFilename() == null ? "archivo" : file.getOriginalFilename().toLowerCase();
 
         try {
@@ -76,37 +85,141 @@ public class OcrService {
         }
     }
 
-    private String extractFromPdf(byte[] bytes) {
+    private OcrResult extractFromPdf(byte[] bytes) {
         try (PDDocument document = Loader.loadPDF(bytes)) {
             PDFRenderer renderer = new PDFRenderer(document);
-            List<String> pages = new ArrayList<>();
+            List<OcrResult> pages = new ArrayList<>();
 
             for (int page = 0; page < document.getNumberOfPages(); page++) {
                 BufferedImage image = renderer.renderImageWithDPI(page, 300, ImageType.RGB);
                 pages.add(runPaddle(preprocess(image)));
             }
 
-            return String.join("\n\n", pages);
+            return mergePageResults(pages);
         } catch (IOException ex) {
             throw new IllegalStateException("No se pudo procesar el PDF.", ex);
         }
     }
 
-    private String runPaddle(BufferedImage image) {
+    private OcrResult runPaddle(BufferedImage image) {
         try {
             String output = callOcrApi(image);
-            JsonNode root = objectMapper.readTree(output);
-            if (root.hasNonNull("error") && !root.path("error").asText().isBlank()) {
-                throw new IllegalStateException("PaddleOCR fallo: " + root.path("error").asText());
-            }
-            String text = root.path("text").asText();
-            if (text.isBlank()) {
+            OcrResult result = parseOcrResult(output);
+            if (result.text() == null || result.text().isBlank()) {
                 throw new IllegalStateException("PaddleOCR no detecto texto util en la factura.");
             }
-            return text;
+            return result;
         } catch (IOException ex) {
             throw new IllegalStateException("No se pudo interpretar la respuesta del servicio OCR.", ex);
         }
+    }
+
+    OcrResult parseOcrResult(String output) throws IOException {
+        JsonNode root = objectMapper.readTree(output);
+        if (root.hasNonNull("error") && !root.path("error").asText().isBlank()) {
+            throw new IllegalStateException("PaddleOCR fallo: " + root.path("error").asText());
+        }
+
+        String text = root.path("text").asText("");
+        String variant = root.path("variant").asText(null);
+        Double score = root.path("score").isNumber() ? root.path("score").asDouble() : null;
+        return new OcrResult(
+                text,
+                parseOcrLines(root.path("lines")),
+                parseOcrDetections(root.path("detections")),
+                variant,
+                score
+        );
+    }
+
+    private List<OcrLine> parseOcrLines(JsonNode linesNode) {
+        List<OcrLine> lines = new ArrayList<>();
+        if (!linesNode.isArray()) {
+            return lines;
+        }
+
+        for (JsonNode line : linesNode) {
+            String text = line.path("text").asText("");
+            if (text.isBlank()) {
+                continue;
+            }
+            lines.add(new OcrLine(
+                    text,
+                    line.path("score").asDouble(0.0),
+                    line.path("confidence").asDouble(0.0),
+                    line.path("top").asDouble(0.0),
+                    line.path("left").asDouble(0.0),
+                    line.path("right").asDouble(0.0),
+                    line.path("bottom").asDouble(0.0)
+            ));
+        }
+        return lines;
+    }
+
+    private List<OcrDetection> parseOcrDetections(JsonNode detectionsNode) {
+        List<OcrDetection> detections = new ArrayList<>();
+        if (!detectionsNode.isArray()) {
+            return detections;
+        }
+
+        for (JsonNode detection : detectionsNode) {
+            String text = detection.path("text").asText("");
+            if (text.isBlank()) {
+                continue;
+            }
+            detections.add(new OcrDetection(
+                    text,
+                    detection.path("confidence").asDouble(0.0),
+                    parseBox(detection.path("box"))
+            ));
+        }
+        return detections;
+    }
+
+    private List<List<Double>> parseBox(JsonNode boxNode) {
+        List<List<Double>> box = new ArrayList<>();
+        if (!boxNode.isArray()) {
+            return box;
+        }
+
+        for (JsonNode pointNode : boxNode) {
+            if (!pointNode.isArray() || pointNode.size() < 2) {
+                continue;
+            }
+            box.add(List.of(pointNode.get(0).asDouble(), pointNode.get(1).asDouble()));
+        }
+        return box;
+    }
+
+    private OcrResult mergePageResults(List<OcrResult> pages) {
+        List<String> texts = new ArrayList<>();
+        List<OcrLine> lines = new ArrayList<>();
+        List<OcrDetection> detections = new ArrayList<>();
+        Set<String> variants = new LinkedHashSet<>();
+        double scoreSum = 0.0;
+        int scoreCount = 0;
+
+        for (OcrResult page : pages) {
+            if (page.text() != null && !page.text().isBlank()) {
+                texts.add(page.text());
+            }
+            if (page.lines() != null) {
+                lines.addAll(page.lines());
+            }
+            if (page.detections() != null) {
+                detections.addAll(page.detections());
+            }
+            if (page.variant() != null && !page.variant().isBlank()) {
+                variants.add(page.variant());
+            }
+            if (page.score() != null) {
+                scoreSum += page.score();
+                scoreCount++;
+            }
+        }
+
+        Double averageScore = scoreCount == 0 ? null : scoreSum / scoreCount;
+        return new OcrResult(String.join("\n\n", texts), lines, detections, String.join(";", variants), averageScore);
     }
 
     private String callOcrApi(BufferedImage image) {

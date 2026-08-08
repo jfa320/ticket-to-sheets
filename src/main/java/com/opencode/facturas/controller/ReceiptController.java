@@ -1,6 +1,7 @@
 package com.opencode.facturas.controller;
 
 import com.opencode.facturas.model.ExtractResponse;
+import com.opencode.facturas.model.OcrResult;
 import com.opencode.facturas.service.OcrService;
 import com.opencode.facturas.service.ReceiptParserService;
 import jakarta.validation.constraints.NotNull;
@@ -31,7 +32,7 @@ public class ReceiptController {
             throw new IllegalArgumentException("Subi una imagen o PDF de la factura.");
         }
 
-        String text = ocrService.extractText(file);
-        return parserService.parse(text);
+        OcrResult ocrResult = ocrService.extract(file);
+        return parserService.parse(ocrResult.text()).withOcrMetadata(ocrResult.variant(), ocrResult.score());
     }
 }

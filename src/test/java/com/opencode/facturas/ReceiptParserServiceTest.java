@@ -36,6 +36,38 @@ class ReceiptParserServiceTest {
         assertTrue(response.csv().contains("Liqui 800ml|Querubin|Los Tres Corazones"));
         assertTrue(response.tsvWithoutHeader().startsWith("Liqui 800ml\tQuerubin\tLos Tres Corazones"));
         assertTrue(response.tsvWithoutHeader().contains("2400,00\t4/3/2026"));
+        assertEquals("CORRECT", response.items().get(0).estado());
+    }
+
+    @Test
+    void marksMergedProductLineAsAmbiguousWithoutDroppingIt() {
+        String raw = """
+                SUPERMERCADO
+                LOS TRES CORAZONES
+                Fecha 01/07/2026
+                GAL OREO LECHE 1L TREGAR 01/08 2000,00
+                """;
+
+        ExtractResponse response = parserService.parse(raw);
+
+        assertEquals(1, response.itemCount());
+        assertEquals("AMBIGUOUS", response.items().get(0).estado());
+        assertTrue(response.items().get(0).descripcion().length() > 3);
+    }
+
+    @Test
+    void reportsDiscardedPriceOnlyLinesAsWarnings() {
+        ExtractResponse response = parserService.parse("""
+                SUPERMERCADO
+                LOS TRES CORAZONES
+                PRODUCTO VALIDO 1200,00
+                NOTA
+                900,00
+                """);
+
+        assertEquals(1, response.itemCount());
+        assertEquals(1, response.warnings().size());
+        assertTrue(response.warnings().get(0).contains("Precio sin descripción"));
     }
 
     @Test
@@ -243,14 +275,14 @@ class ReceiptParserServiceTest {
 
         ExtractResponse response = parserService.parse(raw);
 
-        assertEquals("Pedidosya Market - San Miguel Ii", response.storeName());
-        assertTrue(response.csv().contains("Cebolla|Generico|Pedidosya Market - San Miguel Ii|Supermercado|0.9|888,91|"), response.csv());
-        assertTrue(response.csv().contains("Agua mineral 2|Sierra De Los Padres|Pedidosya Market - San Miguel Ii|Supermercado|1|1572,50|"), response.csv());
-        assertTrue(response.csv().contains("Papas 700|McCain|Pedidosya Market - San Miguel Ii|Supermercado|2|5735,40|"), response.csv());
-        assertTrue(response.csv().contains("Yogur 280|Tregar|Pedidosya Market - San Miguel Ii|Supermercado|1|3849,00|"), response.csv());
-        assertTrue(response.csv().contains("Harina 000 1|Morixe|Pedidosya Market - San Miguel Ii|Supermercado|1|999,00|"), response.csv());
-        assertTrue(response.csv().contains("Leche 3 1|Tregar|Pedidosya Market - San Miguel Ii|Supermercado|2|1552,85|"), response.csv());
-        assertTrue(response.csv().contains("Queso rallado 150|La Paulina|Pedidosya Market - San Miguel Ii|Supermercado|1|5082,15|"), response.csv());
+        assertEquals("PedidosYa Market - San Miguel II", response.storeName());
+        assertTrue(response.csv().contains("Cebolla|Generico|PedidosYa Market - San Miguel II|Supermercado|0.9|888,91|"), response.csv());
+        assertTrue(response.csv().contains("Agua mineral 2|Sierra De Los Padres|PedidosYa Market - San Miguel II|Supermercado|1|1572,50|"), response.csv());
+        assertTrue(response.csv().contains("Papas 700|McCain|PedidosYa Market - San Miguel II|Supermercado|2|5735,40|"), response.csv());
+        assertTrue(response.csv().contains("Yogur 280|Tregar|PedidosYa Market - San Miguel II|Supermercado|1|3849,00|"), response.csv());
+        assertTrue(response.csv().contains("Harina 000 1|Morixe|PedidosYa Market - San Miguel II|Supermercado|1|999,00|"), response.csv());
+        assertTrue(response.csv().contains("Leche 3 1|Tregar|PedidosYa Market - San Miguel II|Supermercado|2|1552,85|"), response.csv());
+        assertTrue(response.csv().contains("Queso rallado 150|La Paulina|PedidosYa Market - San Miguel II|Supermercado|1|5082,15|"), response.csv());
     }
 
     @Test
@@ -272,14 +304,42 @@ class ReceiptParserServiceTest {
 
         ExtractResponse response = parserService.parse(raw);
 
-        assertEquals("Pedidosya Market - San Miguel Ii", response.storeName());
+        assertEquals("PedidosYa Market - San Miguel II", response.storeName());
         assertEquals(7, response.itemCount(), response.csv());
-        assertTrue(response.csv().contains("Cebolla|Generico|Pedidosya Market - San Miguel Ii|Supermercado|0.9|888,91|"), response.csv());
-        assertTrue(response.csv().contains("Agua mineral 2|Sierra De Los Padres|Pedidosya Market - San Miguel Ii|Supermercado|1|1572,50|"), response.csv());
-        assertTrue(response.csv().contains("Papas 700|McCain|Pedidosya Market - San Miguel Ii|Supermercado|2|5735,40|"), response.csv());
-        assertTrue(response.csv().contains("Yogur 280|Tregar|Pedidosya Market - San Miguel Ii|Supermercado|1|3849,00|"), response.csv());
-        assertTrue(response.csv().contains("Harina 0001|Morixe|Pedidosya Market - San Miguel Ii|Supermercado|1|999,00|"), response.csv());
-        assertTrue(response.csv().contains("Leche 3 1|Tregar|Pedidosya Market - San Miguel Ii|Supermercado|2|1552,85|"), response.csv());
-        assertTrue(response.csv().contains("Queso rallado 150|La Paulina|Pedidosya Market - San Miguel Ii|Supermercado|1|5082,15|"), response.csv());
+        assertTrue(response.csv().contains("Cebolla|Generico|PedidosYa Market - San Miguel II|Supermercado|0.9|888,91|"), response.csv());
+        assertTrue(response.csv().contains("Agua mineral 2|Sierra De Los Padres|PedidosYa Market - San Miguel II|Supermercado|1|1572,50|"), response.csv());
+        assertTrue(response.csv().contains("Papas 700|McCain|PedidosYa Market - San Miguel II|Supermercado|2|5735,40|"), response.csv());
+        assertTrue(response.csv().contains("Yogur 280|Tregar|PedidosYa Market - San Miguel II|Supermercado|1|3849,00|"), response.csv());
+        assertTrue(response.csv().contains("Harina 0001|Morixe|PedidosYa Market - San Miguel II|Supermercado|1|999,00|"), response.csv());
+        assertTrue(response.csv().contains("Leche 3 1|Tregar|PedidosYa Market - San Miguel II|Supermercado|2|1552,85|"), response.csv());
+        assertTrue(response.csv().contains("Queso rallado 150|La Paulina|PedidosYa Market - San Miguel II|Supermercado|1|5082,15|"), response.csv());
+    }
+
+    @Test
+    void parsesPedidosYaWithOcrTyposInBrandAndProductHeader() {
+        String raw = """
+                PodidosYa Market - San Miguol II 01locM
+                Hrptt prdiac
+                Tu pedido
+                Hamburguesss Paty ( 72 g ) 4 Undsd
+                $6.117.30 $ s129
+                30x 0Ff
+                Agus Vls Dal Sur SIn Gas &don 62S L
+                $8.158.40 $x1*
+                20X 0ff
+                No irM p lo
+                Uarnar pxx tal6fono si ol timbre no func!ona
+                Tu pago
+                Medios de pago
+                Dotallos sobro la ontrega
+                """;
+
+        ExtractResponse response = parserService.parse(raw);
+
+        assertEquals(2, response.itemCount(), response.csv());
+        assertEquals("PedidosYa Market - San Miguel II", response.storeName());
+        assertTrue(response.warnings().isEmpty(), response.warnings().toString());
+        assertTrue(response.csv().contains("Paty|PedidosYa Market - San Miguel II|Supermercado|1|6117,30|"), response.csv());
+        assertTrue(response.csv().contains("Agus Vls Dal Sur Sin Gas &don 62s L|Generico|PedidosYa Market - San Miguel II|Supermercado|1|8158,40|"), response.csv());
     }
 }

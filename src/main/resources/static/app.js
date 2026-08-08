@@ -9,6 +9,12 @@ const csvOutput = document.getElementById('csvOutput');
 const tsvOutput = document.getElementById('tsvOutput');
 const rawOutput = document.getElementById('rawOutput');
 const submitButton = document.getElementById('submitButton');
+const itemsBody = document.getElementById('itemsBody');
+const itemsEditor = document.getElementById('itemsEditor');
+const emptyItems = document.getElementById('emptyItems');
+const warningsPanel = document.getElementById('warningsPanel');
+const warningsList = document.getElementById('warningsList');
+let editableItems = [];
 updateSubmitButton();
 
 document.getElementById('copyPipe').addEventListener('click', () => copyText(csvOutput.value, 'CSV con | copiado.'));
@@ -51,8 +57,13 @@ form.addEventListener('submit', async (event) => {
         tsvOutput.value = payload.tsv || '';
         window.lastRowsOnly = payload.tsvWithoutHeader || '';
         rawOutput.value = payload.rawText || '';
+        editableItems = (payload.items || []).map(item => ({...item}));
+        renderWarnings(payload.warnings || []);
+        renderItems();
         results.classList.remove('hidden');
-        statusLabel.textContent = 'Listo. Copia la salida que prefieras.';
+        statusLabel.textContent = payload.warnings?.length
+            ? `Listo. Hay ${payload.warnings.length} advertencia(s) para revisar.`
+            : 'Listo. Edita las filas si hace falta y copia la salida.';
     } catch (error) {
         statusLabel.textContent = `Error: ${cleanError(error.message)}`;
     } finally {
@@ -94,4 +105,99 @@ async function copyText(value, successMessage) {
 
 function cleanError(message) {
     return (message || 'No se pudo procesar la factura.').trim();
+}
+
+function renderWarnings(warnings) {
+    warningsList.replaceChildren();
+    warningsPanel.classList.toggle('hidden', warnings.length === 0);
+    warnings.forEach(warning => {
+        const item = document.createElement('li');
+        item.textContent = warning;
+        warningsList.append(item);
+    });
+}
+
+const editableFields = ['descripcion', 'marca', 'cantidad', 'precioUnitario', 'fecha'];
+
+function renderItems() {
+    itemsBody.replaceChildren();
+    const hasItems = editableItems.length > 0;
+    emptyItems.classList.toggle('hidden', hasItems);
+    itemsEditor.classList.toggle('empty-editor', !hasItems);
+    document.querySelector('.table-scroll').classList.toggle('hidden', !hasItems);
+    editableItems.forEach((item, index) => {
+        const row = document.createElement('tr');
+        if (item.estado === 'AMBIGUOUS') {
+            row.classList.add('ambiguous-row');
+        }
+
+        const useCell = document.createElement('td');
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = item.usar !== false;
+        checkbox.addEventListener('change', () => {
+            item.usar = checkbox.checked;
+            refreshExports();
+        });
+        useCell.append(checkbox);
+        row.append(useCell);
+
+        ['descripcion', 'marca', 'lugarDeCompra', 'categoria', 'cantidad', 'precioUnitario', 'fecha'].forEach(field => {
+            const cell = document.createElement('td');
+            cell.textContent = item[field] || '';
+            if (editableFields.includes(field)) {
+                cell.contentEditable = 'true';
+                cell.classList.add('editable-cell');
+                cell.addEventListener('input', () => {
+                    item[field] = cell.textContent.trim();
+                    refreshExports();
+                });
+            } else {
+                cell.classList.add('readonly-cell');
+            }
+            row.append(cell);
+        });
+
+        const stateCell = document.createElement('td');
+        const badge = document.createElement('span');
+        badge.className = `status-badge ${item.estado === 'AMBIGUOUS' ? 'status-ambiguous' : 'status-correct'}`;
+        badge.textContent = item.estado === 'AMBIGUOUS' ? 'Ambiguo' : 'Correcto';
+        stateCell.append(badge);
+        row.append(stateCell);
+
+        const actionCell = document.createElement('td');
+        const removeButton = document.createElement('button');
+        removeButton.type = 'button';
+        removeButton.className = 'remove-row';
+        removeButton.textContent = 'Eliminar';
+        removeButton.addEventListener('click', () => {
+            editableItems.splice(index, 1);
+            renderItems();
+        });
+        actionCell.append(removeButton);
+        row.append(actionCell);
+        itemsBody.append(row);
+    });
+    refreshExports();
+}
+
+function refreshExports() {
+    const selectedItems = editableItems.filter(item => item.usar !== false);
+    itemCount.textContent = selectedItems.length;
+    const headers = ['Descripción', 'Marca', 'Lugar de compra', 'Categoria', 'Cantidad', 'Precio unitario', 'Fecha'];
+    const values = selectedItems.map(item => [
+        item.descripcion, item.marca, item.lugarDeCompra, item.categoria,
+        item.cantidad, item.precioUnitario, item.fecha
+    ]);
+    const rows = [headers, ...values];
+    csvOutput.value = rows.map(row => row.map(value => escapeDelimited(value, '|')).join('|')).join('\n');
+    tsvOutput.value = rows.map(row => row.map(value => escapeDelimited(value, '\t')).join('\t')).join('\n');
+    window.lastRowsOnly = values.map(row => row.map(value => escapeDelimited(value, '\t')).join('\t')).join('\n');
+}
+
+function escapeDelimited(value, delimiter) {
+    const safe = value == null ? '' : String(value);
+    return safe.includes(delimiter) || safe.includes('\n') || safe.includes('"')
+        ? `"${safe.replaceAll('"', '""')}"`
+        : safe;
 }

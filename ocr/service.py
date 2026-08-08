@@ -9,6 +9,7 @@ import tempfile
 import time
 import traceback
 import threading
+from datetime import datetime
 
 os.environ.setdefault("FLAGS_use_mkldnn", "0")
 os.environ.setdefault("FLAGS_use_onednn", "0")
@@ -21,7 +22,9 @@ from flask import Flask, jsonify, request
 import numpy as np
 import paddle
 from paddleocr import PaddleOCR
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
+
+from preprocess import remove_physical_lines
 
 try:
     paddle.set_flags({"FLAGS_use_mkldnn": False})
@@ -39,6 +42,37 @@ OCR_CACHE = {}
 OCR_LOCK = threading.Lock()
 DEFAULT_LANGUAGE = os.environ.get("OCR_DEFAULT_LANGUAGE", "es")
 logging.basicConfig(level=logging.INFO)
+
+
+def debug_enabled():
+    value = os.environ.get("APP_OCR_DEBUG", os.environ.get("OCR_DEBUG", "false"))
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def create_debug_dir():
+    if not debug_enabled():
+        return None
+
+    root = os.environ.get("OCR_DEBUG_DIR", "debug")
+    run_name = "run-" + datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    path = os.path.join(root, run_name)
+    os.makedirs(os.path.join(path, "variants"), exist_ok=True)
+    return path
+
+
+def write_debug_json(debug_dir, name, payload):
+    if not debug_dir:
+        return
+    with open(os.path.join(debug_dir, name), "w", encoding="utf-8") as file:
+        json.dump(payload, file, ensure_ascii=False, indent=2)
+
+
+def save_debug_image(debug_dir, relative_path, image):
+    if not debug_dir:
+        return
+    path = os.path.join(debug_dir, relative_path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    image.save(path, format="PNG")
 
 
 def get_ocr(language):
@@ -90,8 +124,8 @@ def warmup_default_ocr():
             time.sleep(10)
 
 
-def extract_lines(result):
-    boxes = []
+def extract_detections(result):
+    detections = []
     if not result:
         return []
 
@@ -119,25 +153,44 @@ def extract_lines(result):
             if not text:
                 continue
 
+            points = [[float(point[0]), float(point[1])] for point in box]
             top = min(point[1] for point in box)
             bottom = max(point[1] for point in box)
             left = min(point[0] for point in box)
+            right = max(point[0] for point in box)
             height = max(bottom - top, 1)
-            boxes.append({"text": text, "score": score, "top": top, "left": left, "height": height})
+            width = max(right - left, 1)
+            detections.append({
+                "text": text,
+                "confidence": score,
+                "score": score,
+                "box": points,
+                "top": float(top),
+                "left": float(left),
+                "right": float(right),
+                "bottom": float(bottom),
+                "width": float(width),
+                "height": float(height),
+            })
 
-    return merge_boxes_into_rows(boxes)
+    return detections
+
+
+def extract_lines(result):
+    return merge_boxes_into_rows(extract_detections(result))
 
 
 def merge_boxes_into_rows(boxes):
     rows = []
-    boxes.sort(key=lambda item: (item["top"], item["left"]))
+    indexed_boxes = [dict(item, detectionIndex=index) for index, item in enumerate(boxes)]
+    indexed_boxes.sort(key=lambda item: (item["top"], item["left"]))
 
-    for box in boxes:
+    for box in indexed_boxes:
         center = box["top"] + box["height"] / 2
         matching_row = None
 
         for row in rows:
-            threshold = max(18, min(row["height"], box["height"]) * 0.8)
+            threshold = max(18, min(row["height"], box["height"]) * 0.45)
             if abs(center - row["center"]) <= threshold:
                 matching_row = row
                 break
@@ -159,13 +212,39 @@ def merge_boxes_into_rows(boxes):
         text = " ".join(item["text"] for item in row_boxes).strip()
         lines.append({
             "text": text,
-            "score": min(item["score"] for item in row_boxes),
+            "score": min(item["confidence"] for item in row_boxes),
+            "confidence": min(item["confidence"] for item in row_boxes),
             "top": min(item["top"] for item in row_boxes),
             "left": min(item["left"] for item in row_boxes),
+            "right": max(item["right"] for item in row_boxes),
+            "bottom": max(item["bottom"] for item in row_boxes),
+            "width": max(item["right"] for item in row_boxes) - min(item["left"] for item in row_boxes),
+            "height": max(item["bottom"] for item in row_boxes) - min(item["top"] for item in row_boxes),
+            "detectionIndexes": [item["detectionIndex"] for item in row_boxes],
         })
 
     lines.sort(key=lambda item: (item["top"], item["left"]))
     return lines
+
+
+def draw_overlay(image, detections):
+    overlay = image.convert("RGB").copy()
+    draw = ImageDraw.Draw(overlay)
+
+    for index, detection in enumerate(detections):
+        points = [(point[0], point[1]) for point in detection["box"]]
+        if len(points) >= 4:
+            draw.line(points + [points[0]], fill=(255, 0, 0), width=3)
+
+        label_text = detection["text"][:32]
+        label = f"{index} {detection['confidence']:.2f} {label_text}"
+        x = detection["left"]
+        y = max(0, detection["top"] - 18)
+        text_bbox = draw.textbbox((x, y), label)
+        draw.rectangle(text_bbox, fill=(255, 255, 255))
+        draw.text((x, y), label, fill=(255, 0, 0))
+
+    return overlay
 
 
 def crop_receipt_region(image):
@@ -191,7 +270,7 @@ def crop_receipt_region(image):
     return image.crop((left, top, right, bottom))
 
 
-def build_variants(image):
+def build_variants(image, debug_dir=None):
     variants = []
     source = image.convert("RGB")
 
@@ -205,6 +284,12 @@ def build_variants(image):
 
         gray = ImageOps.grayscale(base)
         variants.append((f"gray-{suffix}", gray))
+
+        without_lines = remove_physical_lines(gray)
+        if without_lines is not None:
+            cleaned, line_mask = without_lines
+            variants.append((f"without-lines-{suffix}", cleaned))
+            save_debug_image(debug_dir, f"variants/without-lines-{suffix}-mask.png", line_mask)
 
         contrast = ImageEnhance.Contrast(gray).enhance(2.3)
         sharp = ImageEnhance.Sharpness(contrast).enhance(2.0)
@@ -281,29 +366,51 @@ def ocr_image(ocr, image):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as temp_file:
             image.save(temp_file, format="PNG")
             temp_path = temp_file.name
-        return extract_lines(ocr.ocr(temp_path, cls=False))
+        result = ocr.ocr(temp_path, cls=False)
+        detections = extract_detections(result)
+        return detections, merge_boxes_into_rows(detections)
     finally:
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
 
 
-def run_best_ocr(image, language):
+def run_best_ocr(image, language, debug_dir=None):
     ocr = get_ocr(language)
     best_name = "original"
     best_lines = []
+    best_detections = []
+    best_variant = None
     best_score = -1
+    variant_summaries = []
 
-    for name, variant in build_variants(image):
+    for name, variant in build_variants(image, debug_dir):
+        save_debug_image(debug_dir, f"variants/{name}.png", variant)
         try:
-            lines = ocr_image(ocr, variant)
+            detections, lines = ocr_image(ocr, variant)
         except Exception as exc:
             app.logger.warning("OCR variant '%s' failed: %s", name, exc)
+            variant_summaries.append({"variant": name, "error": str(exc)})
             continue
         score = score_lines(lines)
+        variant_summaries.append({
+            "variant": name,
+            "score": score,
+            "lineCount": len(lines),
+            "detectionCount": len(detections),
+            "preview": " | ".join(line["text"] for line in lines[:8]),
+        })
+        write_debug_json(debug_dir, f"variants/{name}.json", {
+            "variant": name,
+            "score": score,
+            "detections": detections,
+            "lines": lines,
+        })
         if score > best_score:
             best_score = score
             best_lines = lines
+            best_detections = detections
             best_name = name
+            best_variant = variant
 
     if best_score < 0:
         raise RuntimeError("PaddleOCR fallo en todas las variantes de imagen. Revisa tamaño/formato de la foto.")
@@ -311,7 +418,19 @@ def run_best_ocr(image, language):
     preview = " | ".join(line["text"] for line in best_lines[:12])
     app.logger.info("Selected OCR variant '%s' with score %.2f and %d lines: %s", best_name, best_score, len(best_lines), preview)
 
-    return best_name, best_lines
+    if debug_dir:
+        if best_variant is not None:
+            save_debug_image(debug_dir, "selected.png", best_variant)
+            save_debug_image(debug_dir, "detections-overlay.png", draw_overlay(best_variant, best_detections))
+        write_debug_json(debug_dir, "variants-summary.json", variant_summaries)
+        write_debug_json(debug_dir, "detections.json", {
+            "variant": best_name,
+            "score": best_score,
+            "detections": best_detections,
+            "lines": best_lines,
+        })
+
+    return best_name, best_lines, best_detections, best_score
 
 
 @app.post("/ocr")
@@ -323,10 +442,22 @@ def ocr_endpoint():
 
     try:
         image = Image.open(BytesIO(request.data)).convert("RGB")
-        variant_name, lines = run_best_ocr(image, language)
+        debug_dir = create_debug_dir()
+        save_debug_image(debug_dir, "original.png", image)
+        variant_name, lines, detections, score = run_best_ocr(image, language, debug_dir)
         text = "\n".join(line["text"] for line in lines)
+        response = {
+            "text": text,
+            "lines": lines,
+            "detections": detections,
+            "variant": variant_name,
+            "score": score,
+        }
+        if debug_dir:
+            response["debugDir"] = debug_dir
+            write_debug_json(debug_dir, "ocr-response.json", response)
         return app.response_class(
-            response=json.dumps({"text": text, "lines": lines, "variant": variant_name}, ensure_ascii=False),
+            response=json.dumps(response, ensure_ascii=False),
             status=200,
             mimetype="application/json",
         )
