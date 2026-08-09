@@ -62,6 +62,35 @@ public class BrandCatalog {
                 .max(Comparator.comparingInt(match -> compact(match.normalizedAlias()).length()));
     }
 
+    public synchronized Optional<FuzzyBrandMatch> findFuzzyAtStart(String description) {
+        Optional<FuzzyBrandMatch> best = findBestFuzzyAtStart(description);
+        if (best.isEmpty()) {
+            return Optional.empty();
+        }
+        String firstToken = comparisonKey(normalize(description).split(" ")[0]);
+        String alias = comparisonKey(best.get().normalizedAlias());
+        int requiredPrefix = Math.max(2, (int) Math.ceil(Math.max(firstToken.length(), alias.length()) * 0.2));
+        return commonPrefixLength(firstToken, alias) >= requiredPrefix ? best : Optional.empty();
+    }
+
+    public synchronized Optional<FuzzyBrandMatch> findBestFuzzyAtStart(String description) {
+        String firstToken = comparisonKey(normalize(description).split(" ")[0]);
+        if (firstToken.length() < 4) {
+            return Optional.empty();
+        }
+
+        return brands.stream()
+                .flatMap(brand -> aliasesFor(brand).stream()
+                        .map(alias -> new FuzzyBrandMatch(brand, normalize(alias).split(" ")[0])))
+                .filter(match -> match.normalizedAlias().length() >= 4)
+                .map(match -> new FuzzyBrandMatch(
+                        match.brand(),
+                        match.normalizedAlias(),
+                        similarity(firstToken, comparisonKey(match.normalizedAlias()))))
+                .max(Comparator.comparingDouble(FuzzyBrandMatch::percentage)
+                        .thenComparingInt(match -> match.normalizedAlias().length()));
+    }
+
     public synchronized void remember(String brand) {
         String cleaned = cleanBrand(brand);
         String normalized = normalize(cleaned);
@@ -143,6 +172,48 @@ public class BrandCatalog {
         return value.replace(" ", "");
     }
 
+    private double similarity(String left, String right) {
+        int maxLength = Math.max(left.length(), right.length());
+        if (maxLength == 0) {
+            return 100.0;
+        }
+        return (1.0 - (double) levenshtein(left, right) / maxLength) * 100.0;
+    }
+
+    private String comparisonKey(String value) {
+        return value.replace('0', 'o')
+                .replace('1', 'i')
+                .replace('5', 's')
+                .replace('8', 'b')
+                .replace('3', 'e');
+    }
+
+    private int commonPrefixLength(String left, String right) {
+        int length = Math.min(left.length(), right.length());
+        int index = 0;
+        while (index < length && left.charAt(index) == right.charAt(index)) {
+            index++;
+        }
+        return index;
+    }
+
+    private int levenshtein(String left, String right) {
+        int[] previous = new int[right.length() + 1];
+        for (int column = 0; column <= right.length(); column++) {
+            previous[column] = column;
+        }
+        for (int row = 1; row <= left.length(); row++) {
+            int[] current = new int[right.length() + 1];
+            current[0] = row;
+            for (int column = 1; column <= right.length(); column++) {
+                int substitution = previous[column - 1] + (left.charAt(row - 1) == right.charAt(column - 1) ? 0 : 1);
+                current[column] = Math.min(Math.min(previous[column] + 1, current[column - 1] + 1), substitution);
+            }
+            previous = current;
+        }
+        return previous[right.length()];
+    }
+
     private String normalize(String value) {
         return Normalizer.normalize(value == null ? "" : value.toLowerCase(Locale.ROOT), Normalizer.Form.NFD)
                 .replaceAll("\\p{M}", "")
@@ -152,5 +223,11 @@ public class BrandCatalog {
     }
 
     public record BrandMatch(String brand, String normalizedAlias) {
+    }
+
+    public record FuzzyBrandMatch(String brand, String normalizedAlias, double percentage) {
+        public FuzzyBrandMatch(String brand, String normalizedAlias) {
+            this(brand, normalizedAlias, 0.0);
+        }
     }
 }

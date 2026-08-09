@@ -13,7 +13,11 @@ public record CorrectionsRequest(
             @NotBlank String firma,
             String descripcion,
             String marca,
-            String categoria
+            String categoria,
+            String marcaOriginal
     ) {
+        public Correction(String firma, String descripcion, String marca, String categoria) {
+            this(firma, descripcion, marca, categoria, null);
+        }
     }
 }

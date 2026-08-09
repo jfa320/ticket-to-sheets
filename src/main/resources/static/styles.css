@@ -173,6 +173,31 @@ button:disabled {
     margin-top: 0;
 }
 
+.copy-toast {
+    align-self: center;
+    min-height: 20px;
+    padding: 7px 12px;
+    border-radius: 999px;
+    color: var(--accent-strong);
+    background: rgba(31, 107, 83, 0.14);
+    font-size: 0.86rem;
+    font-weight: 800;
+    opacity: 0;
+    transform: translateY(4px);
+    pointer-events: none;
+    transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.copy-toast-visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.copy-toast-error {
+    color: #7a3028;
+    background: rgba(140, 63, 53, 0.14);
+}
+
 .output-block {
     padding: 18px;
 }
@@ -222,6 +247,19 @@ button:disabled {
 
 .table-scroll {
     overflow-x: auto;
+}
+
+.items-total {
+    display: flex;
+    justify-content: flex-end;
+    gap: 14px;
+    padding: 16px 8px 2px;
+    color: var(--muted);
+}
+
+.items-total strong {
+    color: var(--ink);
+    font-size: 1.1rem;
 }
 
 table {
@@ -325,6 +363,16 @@ textarea {
 
 .raw-block textarea {
     min-height: 180px;
+}
+
+.raw-block summary {
+    cursor: pointer;
+    color: var(--muted);
+    font-weight: 700;
+}
+
+.raw-block[open] summary {
+    margin-bottom: 12px;
 }
 
 @media (max-width: 720px) {

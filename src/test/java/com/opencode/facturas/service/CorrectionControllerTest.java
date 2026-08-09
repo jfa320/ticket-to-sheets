@@ -49,4 +49,14 @@ class CorrectionControllerTest {
 
         assertEquals(0, controller.learn(request).saved());
     }
+
+    @Test
+    void genericOriginalDoesNotSaveCorrection() {
+        CorrectionsRequest request = new CorrectionsRequest(
+                "Los Tres Corazones",
+                List.of(new CorrectionsRequest.Correction(
+                        "articulo especial 1200", "Articulo", "Molto", "Supermercado", "Genérico")));
+
+        assertEquals(0, controller.learn(request).saved());
+    }
 }

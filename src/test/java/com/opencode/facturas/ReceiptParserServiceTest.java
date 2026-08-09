@@ -8,6 +8,7 @@ import com.opencode.facturas.service.CorrectionMemory;
 import com.opencode.facturas.service.ReceiptParserService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.core.io.ClassPathResource;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -21,9 +22,16 @@ class ReceiptParserServiceTest {
     @TempDir
     Path tempDir;
 
-    private final ReceiptParserService parserService = new ReceiptParserService(
-            new StoreNameMapper(new ObjectMapper(), new ClassPathResource("store-mappings.json"))
-    );
+    private ReceiptParserService parserService;
+
+    @BeforeEach
+    void setUpParser() {
+        parserService = new ReceiptParserService(
+                new StoreNameMapper(new ObjectMapper(), new ClassPathResource("store-mappings.json")),
+                new BrandCatalog(new ObjectMapper()),
+                new CorrectionMemory(new ObjectMapper(), tempDir.resolve("corrections.json"))
+        );
+    }
 
     @Test
     void parseReceiptLinesIntoRows() {
@@ -42,10 +50,87 @@ class ReceiptParserServiceTest {
         assertEquals("Los Tres Corazones", response.storeName());
         assertEquals("4/3/2026", response.date());
         assertEquals(3, response.itemCount(), response.csv());
+        assertEquals("9100,00", response.total());
         assertTrue(response.csv().contains("Liqui 800ml|Querubin|Los Tres Corazones"));
         assertTrue(response.tsvWithoutHeader().startsWith("Liqui 800ml\tQuerubin\tLos Tres Corazones"));
         assertTrue(response.tsvWithoutHeader().contains("2400,00\t4/3/2026"));
         assertEquals("CORRECT", response.items().get(0).estado());
+    }
+
+    @Test
+    void ignoresSubtotalVariantsAndUsesGenericBrandWhenUnknown() {
+        ExtractResponse response = parserService.parse("""
+                LOS TRES CORAZONES
+                ARTICULO ESPECIAL 1200,00
+                SUBTOT 1200,00
+                """);
+
+        assertEquals(1, response.itemCount());
+        assertEquals("Genérico", response.items().get(0).marca());
+        assertEquals("1200,00", response.total());
+    }
+
+    @Test
+    void infersUppercaseBrandBeforeProductDescription() {
+        ExtractResponse response = parserService.parse("""
+                LOS TRES CORAZONES
+                VERDEFLOR YERB 500GR 1900,00
+                MOLTO JARDINER 340GR 1100,00
+                """);
+
+        assertEquals("Verdeflor", response.items().get(0).marca());
+        assertEquals("Molto", response.items().get(1).marca());
+    }
+
+    @Test
+    void correctsOcrZeroToKnownBrandWithHighSimilarity() {
+        ExtractResponse response = parserService.parse("""
+                LOS TRES CORAZONES
+                MOLT0 JARDINER 340GR 1100,00
+                """);
+
+        assertEquals("Molto", response.items().get(0).marca());
+        assertTrue(response.items().get(0).descripcion().toLowerCase().startsWith("jardin"));
+        assertTrue(!response.items().get(0).descripcion().toLowerCase().contains("molt0"));
+        assertEquals("CORRECT", response.items().get(0).estado());
+        assertTrue(response.warnings().isEmpty());
+    }
+
+    @Test
+    void exposesMediumSimilarityBrandForUserReview() {
+        ExtractResponse response = parserService.parse("""
+                LOS TRES CORAZONES
+                MOLX JARDINER 340GR 1100,00
+                """);
+
+        assertEquals("Molx", response.items().get(0).marca());
+        assertEquals("AMBIGUOUS", response.items().get(0).estado());
+        assertTrue(response.warnings().stream().anyMatch(warning -> warning.toLowerCase().contains("molx -> molto")));
+    }
+
+    @Test
+    void usesGenericBelowFuzzySimilarityThreshold() {
+        ExtractResponse response = parserService.parse("""
+                LOS TRES CORAZONES
+                ZZZZZZ JARDINER 340GR 1100,00
+                """);
+
+        assertEquals("Genérico", response.items().get(0).marca());
+    }
+
+    @Test
+    void doesNotSuggestUnrelatedBrandWithoutCompatiblePrefix() {
+        ExtractResponse response = parserService.parse("""
+                LOS TRES CORAZONES
+                POETT FRESIJFA 90OML 1500,00
+                PEPSI GASEOSA 1500ML 2000,00
+                """);
+
+        assertEquals("Poett", response.items().get(0).marca());
+        assertEquals("Pepsi", response.items().get(1).marca());
+        assertTrue(response.warnings().stream().noneMatch(warning -> warning.contains("-> Molto")));
+        assertTrue(response.warnings().stream().noneMatch(warning -> warning.contains("-> Paps")));
+        assertTrue(response.warnings().stream().noneMatch(warning -> warning.contains("sin candidata confiable")));
     }
 
     @Test
@@ -119,7 +204,8 @@ class ReceiptParserServiceTest {
 
         assertEquals(3, response.itemCount());
         assertEquals("Los Tres Corazones", response.storeName());
-        assertTrue(response.csv().contains("Suavizante 90oml|Querubin|Los Tres Corazones"));
+        assertTrue(response.csv().contains("Suavizante 90oml|Querubin|Los Tres Corazones"), response.csv());
+        assertTrue(response.csv().contains("|Supermercado|"), response.csv());
         assertTrue(response.csv().contains("Azucar 500gr|Hileret|Los Tres Corazones"));
         assertTrue(response.csv().contains("Galletitas 17ogr|Parnor|Los Tres Corazones"));
         assertTrue(response.tsvWithoutHeader().lines().noneMatch(line -> line.contains("$")));
@@ -285,7 +371,7 @@ class ReceiptParserServiceTest {
         ExtractResponse response = parserService.parse(raw);
 
         assertEquals("PedidosYa Market - San Miguel II", response.storeName());
-        assertTrue(response.csv().contains("Cebolla|Generico|PedidosYa Market - San Miguel II|Supermercado|0.9|888,91|"), response.csv());
+        assertTrue(response.csv().contains("Cebolla|Genérico|PedidosYa Market - San Miguel II|Supermercado|0.9|888,91|"), response.csv());
         assertTrue(response.csv().contains("Agua mineral 2|Sierra De Los Padres|PedidosYa Market - San Miguel II|Supermercado|1|1572,50|"), response.csv());
         assertTrue(response.csv().contains("Papas 700|McCain|PedidosYa Market - San Miguel II|Supermercado|2|5735,40|"), response.csv());
         assertTrue(response.csv().contains("Yogur 280|Tregar|PedidosYa Market - San Miguel II|Supermercado|1|3849,00|"), response.csv());
@@ -315,7 +401,7 @@ class ReceiptParserServiceTest {
 
         assertEquals("PedidosYa Market - San Miguel II", response.storeName());
         assertEquals(7, response.itemCount(), response.csv());
-        assertTrue(response.csv().contains("Cebolla|Generico|PedidosYa Market - San Miguel II|Supermercado|0.9|888,91|"), response.csv());
+        assertTrue(response.csv().contains("Cebolla|Genérico|PedidosYa Market - San Miguel II|Supermercado|0.9|888,91|"), response.csv());
         assertTrue(response.csv().contains("Agua mineral 2|Sierra De Los Padres|PedidosYa Market - San Miguel II|Supermercado|1|1572,50|"), response.csv());
         assertTrue(response.csv().contains("Papas 700|McCain|PedidosYa Market - San Miguel II|Supermercado|2|5735,40|"), response.csv());
         assertTrue(response.csv().contains("Yogur 280|Tregar|PedidosYa Market - San Miguel II|Supermercado|1|3849,00|"), response.csv());
@@ -349,7 +435,7 @@ class ReceiptParserServiceTest {
         assertEquals("PedidosYa Market - San Miguel II", response.storeName());
         assertTrue(response.warnings().isEmpty(), response.warnings().toString());
         assertTrue(response.csv().contains("Paty|PedidosYa Market - San Miguel II|Supermercado|1|6117,30|"), response.csv());
-        assertTrue(response.csv().contains("Agus Vls Dal Sur Sin Gas &don 62s L|Generico|PedidosYa Market - San Miguel II|Supermercado|1|8158,40|"), response.csv());
+        assertTrue(response.csv().contains("Agus Vls Dal Sur Sin Gas &don 62s L|Genérico|PedidosYa Market - San Miguel II|Supermercado|1|8158,40|"), response.csv());
     }
 
     private ReceiptParserService parserWithMemory(CorrectionMemory memory) {
@@ -391,6 +477,46 @@ class ReceiptParserServiceTest {
         assertEquals("Oreo", item.marca());
         assertEquals("Galletitas", item.categoria());
         assertEquals("LEARNED", item.estado());
+    }
+
+    @Test
+    void keepsStoreCategoryWhenMemoryCategoryIsEmpty() {
+        CorrectionMemory memory = new CorrectionMemory(new ObjectMapper(), tempDir.resolve("corrections.json"));
+        memory.upsert("Los Tres Corazones", "gal oreo leche 1l", "Galletitas Oreo", "Oreo", "");
+        ReceiptParserService parser = parserWithMemory(memory);
+
+        ReceiptItem item = parser.parse("""
+                LOS TRES CORAZONES
+                GAL OREO LECHE 1L 2000,00
+                """).items().get(0);
+
+        assertEquals("Supermercado", item.categoria());
+    }
+
+    @Test
+    void assignsPerfumeriaCategoryToPigmento() {
+        ReceiptItem item = parserService.parse("""
+                PERFUMERIAS PIGMENTO
+                SHAMPOO 1000,00
+                """).items().get(0);
+
+        assertEquals("Perfumerias Pigmento", item.lugarDeCompra());
+        assertEquals("Perfumeria", item.categoria());
+    }
+
+    @Test
+    void assignsCategoriesToAdditionalStores() {
+        assertStoreCategory("CENTRAL DE SABORES", "Central De Sabores", "Panaderia");
+        assertStoreCategory("ESTANCIA SAN FRANCISCO", "Estancia San Francisco", "Otros");
+        assertStoreCategory("FARMACIAS TKL SAN MIGUEL", "Farmacias Tkl San Miguel", "Farmacia");
+        assertStoreCategory("TUTI FRUTI", "Tuti Fruti", "Verduleria");
+    }
+
+    private void assertStoreCategory(String storeLine, String expectedStore, String expectedCategory) {
+        ReceiptItem item = parserService.parse(storeLine + "\nPRODUCTO 1000,00").items().get(0);
+
+        assertEquals(expectedStore, item.lugarDeCompra());
+        assertEquals(expectedCategory, item.categoria());
     }
 
     @Test

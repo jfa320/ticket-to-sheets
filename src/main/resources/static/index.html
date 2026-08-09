@@ -12,9 +12,9 @@
 <body>
 <main class="shell">
     <section class="hero">
-        <p class="eyebrow">PaddleOCR gratis + parser local</p>
+        <p class="eyebrow">Carga simple de facturas</p>
         <h1>Subi una factura y llevatela lista para pegar en Google Sheets.</h1>
-        <p class="lead">Procesa imagen o PDF con PaddleOCR en Docker, detecta fecha y comercio, arma filas por producto y te devuelve texto util para copiar o guardar.</p>
+        <p class="lead">Subí una imagen o PDF, revisá los datos y copialos donde los necesites.</p>
     </section>
 
     <section class="panel uploader">
@@ -50,7 +50,7 @@
             <div class="output-header">
                 <div>
                     <h2>Advertencias para revisar</h2>
-                    <span>Son líneas que el parser no pudo confirmar con seguridad.</span>
+                    <span>Algunas líneas necesitan una revisión antes de copiar.</span>
                 </div>
             </div>
             <ul id="warningsList"></ul>
@@ -60,7 +60,7 @@
             <div class="output-header">
                 <div>
                     <h2>Filas detectadas</h2>
-                    <span>Edita los campos necesarios antes de copiar. Tus correcciones se aprenden para el próximo ticket.</span>
+                        <span>Revisá y corregí los datos antes de copiar. Tus correcciones se guardan para próximos tickets.</span>
                 </div>
             </div>
             <p id="emptyItems" class="empty-items hidden">No se detectaron productos para revisar.</p>
@@ -83,40 +83,42 @@
                     <tbody id="itemsBody"></tbody>
                 </table>
             </div>
+            <div class="items-total">
+                <span>Total calculado</span>
+                <strong id="totalValue">$ 0,00</strong>
+            </div>
         </div>
 
         <div class="panel actions">
-            <button id="copyPipe" type="button">Copiar formato con |</button>
-            <button id="copyTsv" type="button">Copiar formato para Sheets</button>
-            <button id="copyRowsOnly" type="button">Copiar filas sin cabecera</button>
+            <button id="copyPipe" type="button">Copiar texto</button>
+            <button id="copyTsv" type="button">Copiar para Google Sheets</button>
+            <button id="copyRowsOnly" type="button">Copiar solo las filas</button>
+            <div id="copyToast" class="copy-toast" role="status" aria-live="polite"></div>
         </div>
 
         <div class="panel output-block">
             <div class="output-header">
-                <h2>Salida con separador |</h2>
-                <span>Lista para pegar o guardar como CSV</span>
+                <h2>Texto para copiar</h2>
+                <span>Formato alternativo para guardar o compartir</span>
             </div>
             <textarea id="csvOutput" spellcheck="false"></textarea>
         </div>
 
         <div class="panel output-block">
             <div class="output-header">
-                <h2>Salida tabulada</h2>
-                <span>Mejor opcion para pegar directo en Google Sheets</span>
+                <h2>Texto para Google Sheets</h2>
+                <span>Listo para pegar directamente en una planilla</span>
             </div>
             <textarea id="tsvOutput" spellcheck="false"></textarea>
         </div>
 
-        <div class="panel output-block raw-block">
-            <div class="output-header">
-                <h2>Texto OCR crudo</h2>
-                <span>Sirve para revisar errores o ajustar reglas</span>
-            </div>
+        <details class="panel output-block raw-block">
+            <summary>Ver texto original para diagnóstico</summary>
             <textarea id="rawOutput" spellcheck="false"></textarea>
-        </div>
+        </details>
     </section>
 </main>
 
-<script src="/app.js"></script>
+<script src="/app.js?v=3"></script>
 </body>
 </html>

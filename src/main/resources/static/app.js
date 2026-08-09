@@ -5,6 +5,7 @@ const results = document.getElementById('results');
 const storeName = document.getElementById('storeName');
 const dateValue = document.getElementById('dateValue');
 const itemCount = document.getElementById('itemCount');
+const totalValue = document.getElementById('totalValue');
 const csvOutput = document.getElementById('csvOutput');
 const tsvOutput = document.getElementById('tsvOutput');
 const rawOutput = document.getElementById('rawOutput');
@@ -14,15 +15,17 @@ const itemsEditor = document.getElementById('itemsEditor');
 const emptyItems = document.getElementById('emptyItems');
 const warningsPanel = document.getElementById('warningsPanel');
 const warningsList = document.getElementById('warningsList');
+const copyToast = document.getElementById('copyToast');
 let editableItems = [];
 let storeNameForLearn = '';
 let originalsByFirma = new Map();
 let learnTimer = null;
+let copyToastTimer = null;
 updateSubmitButton();
 
-document.getElementById('copyPipe').addEventListener('click', () => copyText(csvOutput.value, 'CSV con | copiado.'));
-document.getElementById('copyTsv').addEventListener('click', () => copyText(window.lastRowsOnly || '', 'Texto tabulado sin cabecera copiado.'));
-document.getElementById('copyRowsOnly').addEventListener('click', () => copyText(window.lastRowsOnly || '', 'Filas sin cabecera copiadas.'));
+document.getElementById('copyPipe').addEventListener('click', () => copyText(csvOutput.value, 'Texto copiado.'));
+document.getElementById('copyTsv').addEventListener('click', () => copyText(window.lastRowsOnly || '', 'Listo para pegar en Google Sheets.'));
+document.getElementById('copyRowsOnly').addEventListener('click', () => copyText(window.lastRowsOnly || '', 'Filas copiadas.'));
 
 fileInput.addEventListener('change', updateSelectedFileState);
 fileInput.addEventListener('input', updateSelectedFileState);
@@ -39,7 +42,7 @@ form.addEventListener('submit', async (event) => {
     const data = new FormData();
     data.append('file', file);
 
-    setLoading(true, 'Procesando PaddleOCR en Docker, esto puede tardar unos segundos...');
+    setLoading(true, 'Procesando la factura, esto puede tardar unos segundos...');
 
     try {
         const response = await fetch('/api/receipts/extract', {
@@ -56,6 +59,7 @@ form.addEventListener('submit', async (event) => {
         storeName.textContent = payload.storeName || '-';
         dateValue.textContent = payload.date || '-';
         itemCount.textContent = payload.itemCount ?? 0;
+        totalValue.textContent = formatTotal(payload.total);
         csvOutput.value = payload.csv || '';
         tsvOutput.value = payload.tsv || '';
         window.lastRowsOnly = payload.tsvWithoutHeader || '';
@@ -102,11 +106,28 @@ function hasSelectedFile() {
 async function copyText(value, successMessage) {
     if (!value) {
         statusLabel.textContent = 'Todavia no hay salida para copiar.';
+        showCopyToast('Todavía no hay texto para copiar.', true);
         return;
     }
 
-    await navigator.clipboard.writeText(value);
-    statusLabel.textContent = successMessage;
+    try {
+        await navigator.clipboard.writeText(value);
+        statusLabel.textContent = successMessage;
+        showCopyToast(successMessage);
+    } catch (error) {
+        statusLabel.textContent = 'No se pudo copiar el texto.';
+        showCopyToast('No se pudo copiar el texto.', true);
+    }
+}
+
+function showCopyToast(message, isError = false) {
+    clearTimeout(copyToastTimer);
+    copyToast.textContent = message;
+    copyToast.classList.toggle('copy-toast-error', isError);
+    copyToast.classList.add('copy-toast-visible');
+    copyToastTimer = setTimeout(() => {
+        copyToast.classList.remove('copy-toast-visible');
+    }, 2200);
 }
 
 function cleanError(message) {
@@ -123,7 +144,7 @@ function renderWarnings(warnings) {
     });
 }
 
-const editableFields = ['descripcion', 'marca', 'cantidad', 'precioUnitario', 'fecha'];
+const editableFields = ['descripcion', 'marca', 'lugarDeCompra', 'cantidad', 'precioUnitario', 'fecha'];
 
 function renderItems() {
     itemsBody.replaceChildren();
@@ -200,6 +221,7 @@ function renderItems() {
 function refreshExports() {
     const selectedItems = editableItems.filter(item => item.usar !== false);
     itemCount.textContent = selectedItems.length;
+    totalValue.textContent = formatTotal(calculateTotal(selectedItems));
     const headers = ['Descripción', 'Marca', 'Lugar de compra', 'Categoria', 'Cantidad', 'Precio unitario', 'Fecha'];
     const values = selectedItems.map(item => [
         item.descripcion, item.marca, item.lugarDeCompra, item.categoria,
@@ -209,6 +231,34 @@ function refreshExports() {
     csvOutput.value = rows.map(row => row.map(value => escapeDelimited(value, '|')).join('|')).join('\n');
     tsvOutput.value = rows.map(row => row.map(value => escapeDelimited(value, '\t')).join('\t')).join('\n');
     window.lastRowsOnly = values.map(row => row.map(value => escapeDelimited(value, '\t')).join('\t')).join('\n');
+}
+
+function calculateTotal(items) {
+    return items.reduce((sum, item) => {
+        const unitPrice = parseLocalizedNumber(item.precioUnitario);
+        const quantity = parseLocalizedNumber(item.cantidad) || 1;
+        return sum + unitPrice * quantity;
+    }, 0);
+}
+
+function parseLocalizedNumber(value) {
+    const text = String(value ?? '')
+        .trim()
+        .replace(/\s/g, '')
+        .replace(/\$/g, '');
+    if (!text) {
+        return 0;
+    }
+    const normalized = text.includes(',')
+        ? text.replaceAll('.', '').replace(',', '.')
+        : text;
+    const number = Number(normalized);
+    return Number.isFinite(number) ? number : 0;
+}
+
+function formatTotal(value) {
+    const number = typeof value === 'number' ? value : parseLocalizedNumber(value);
+    return `$ ${number.toLocaleString('es-AR', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
 }
 
 function escapeDelimited(value, delimiter) {
@@ -239,6 +289,9 @@ function sendCorrections() {
         if (!original) {
             return;
         }
+        if (isGenericBrand(original.marca) || isGenericBrand(item.marca)) {
+            return;
+        }
         const diffs = {};
         ['descripcion', 'marca', 'categoria'].forEach(field => {
             if ((item[field] || '') !== (original[field] || '')) {
@@ -249,6 +302,7 @@ function sendCorrections() {
             return;
         }
         diffs.firma = item.firma;
+        diffs.marcaOriginal = original.marca || '';
         corrections.push(diffs);
     });
 
@@ -281,4 +335,12 @@ function sendCorrections() {
     }).catch(error => {
         statusLabel.textContent = `Aviso: ${cleanError(error.message)}`;
     });
+}
+
+function isGenericBrand(value) {
+    return String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim()
+        .toLowerCase() === 'generico';
 }

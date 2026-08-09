@@ -7,6 +7,9 @@ App local para subir una foto o PDF de un ticket, correr OCR gratis con PaddleOC
 - extrae texto de imagen o PDF con PaddleOCR
 - detecta fecha y lugar de compra
 - arma filas con estas columnas: `Descripción|Marca|Lugar de compra|Categoria|Cantidad|Precio unitario|Fecha`
+- muestra un `Total calculado` debajo de las filas, sumando cantidad por precio unitario de los items extraidos (nunca el total del OCR)
+- descarta lineas de subtotal y usa `Genérico` cuando no reconoce la marca
+- corrige marcas OCR con Levenshtein: menos de 30% usa `Genérico`, de 30% a 70% deja la marca dudosa para revisar y más de 70% aplica la marca automáticamente
 - genera dos salidas:
   - formato con `|` para guardar o copiar
   - formato tabulado para pegar directo en Google Sheets

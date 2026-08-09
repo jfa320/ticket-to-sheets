@@ -8,6 +8,8 @@ services:
       APP_OCR_ENDPOINT: http://paddleocr:5000/ocr
       APP_OCR_HEALTH_ENDPOINT: http://paddleocr:5000/health
       APP_OCR_LANGUAGE: es
+      TZ: America/Argentina/Buenos_Aires
+      JAVA_TOOL_OPTIONS: -Duser.timezone=America/Argentina/Buenos_Aires
     ports:
       - "8080:8080"
     volumes:
@@ -23,6 +25,7 @@ services:
     container_name: facturas-paddleocr
     environment:
       OCR_DEFAULT_LANGUAGE: es
+      TZ: America/Argentina/Buenos_Aires
       FLAGS_use_mkldnn: "0"
       FLAGS_use_onednn: "0"
       OMP_NUM_THREADS: "1"

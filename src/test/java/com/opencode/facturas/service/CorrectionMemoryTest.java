@@ -81,4 +81,12 @@ class CorrectionMemoryTest {
         assertNull(memory.find("LTC", "cualquier cosa"));
         assertEquals(false, memoryPath.toFile().exists());
     }
+
+    @Test
+    void genericDoesNotReplaceARealLearnedBrand() {
+        memory.upsert("LTC", "molto jardiner 340gr", "Jardiner", "Molto", "Supermercado");
+        memory.upsert("LTC", "molto jardiner 340gr", "Jardiner", "Genérico", "Supermercado");
+
+        assertEquals("Molto", memory.find("LTC", "molto jardiner 340gr").marca());
+    }
 }

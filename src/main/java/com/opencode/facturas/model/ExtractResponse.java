@@ -7,6 +7,7 @@ public record ExtractResponse(
         String storeName,
         String date,
         int itemCount,
+        String total,
         String csv,
         String tsv,
         String tsvWithoutHeader,
@@ -26,7 +27,7 @@ public record ExtractResponse(
             String rawText,
             List<ReceiptItem> items
     ) {
-        this(storeName, date, itemCount, csv, tsv, tsvWithoutHeader, rawText, items, null, null, Collections.emptyList());
+        this(storeName, date, itemCount, "", csv, tsv, tsvWithoutHeader, rawText, items, null, null, Collections.emptyList());
     }
 
     public ExtractResponse(
@@ -41,10 +42,40 @@ public record ExtractResponse(
             String variant,
             Double score
     ) {
-        this(storeName, date, itemCount, csv, tsv, tsvWithoutHeader, rawText, items, variant, score, Collections.emptyList());
+        this(storeName, date, itemCount, "", csv, tsv, tsvWithoutHeader, rawText, items, variant, score, Collections.emptyList());
+    }
+
+    public ExtractResponse(
+            String storeName,
+            String date,
+            int itemCount,
+            String total,
+            String csv,
+            String tsv,
+            String tsvWithoutHeader,
+            String rawText,
+            List<ReceiptItem> items
+    ) {
+        this(storeName, date, itemCount, total, csv, tsv, tsvWithoutHeader, rawText, items, null, null, Collections.emptyList());
+    }
+
+    public ExtractResponse(
+            String storeName,
+            String date,
+            int itemCount,
+            String total,
+            String csv,
+            String tsv,
+            String tsvWithoutHeader,
+            String rawText,
+            List<ReceiptItem> items,
+            String variant,
+            Double score
+    ) {
+        this(storeName, date, itemCount, total, csv, tsv, tsvWithoutHeader, rawText, items, variant, score, Collections.emptyList());
     }
 
     public ExtractResponse withOcrMetadata(String variant, Double score) {
-        return new ExtractResponse(storeName, date, itemCount, csv, tsv, tsvWithoutHeader, rawText, items, variant, score, warnings);
+        return new ExtractResponse(storeName, date, itemCount, total, csv, tsv, tsvWithoutHeader, rawText, items, variant, score, warnings);
     }
 }

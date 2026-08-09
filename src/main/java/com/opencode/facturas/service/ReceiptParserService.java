@@ -9,12 +9,15 @@ import org.springframework.stereotype.Service;
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
 import java.text.Normalizer;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -36,6 +39,21 @@ public class ReceiptParserService {
     private static final Pattern NUMBER_TOKEN_PATTERN = Pattern.compile("\\d+(?:[\\.,]\\d+)*");
     private static final Pattern MULTIPLIER_PATTERN = Pattern.compile("(?i)\\b(\\d+)\\s*[xX]\\s*(\\d+(?:[\\.,]\\d{3})*[\\.,]\\d{2})\\b");
     private static final List<String> STOP_WORDS = List.of("subtotal", "total", "recibi", "cambio", "tarjeta", "efectivo");
+    private static final Map<String, String> STORE_CATEGORIES = Map.of(
+            "los tres corazones", "Supermercado",
+            "pedidosya market san miguel ii", "Supermercado",
+            "tienda filipa", "Supermercado",
+            "perfumerias pigmento", "Perfumeria",
+            "central de sabores", "Panaderia",
+            "estancia san francisco", "Otros",
+            "farmacias tkl san miguel", "Farmacia",
+            "tuti fruti", "Verduleria"
+        );
+    private static final Set<String> NON_BRAND_PREFIXES = Set.of(
+            "articulo", "producto", "papel", "leche", "azucar", "harina", "arroz", "yerba", "galletitas",
+            "galleta", "jabon", "manteca", "sal", "agua", "pan", "carne", "queso", "fideos", "detergente",
+            "suavizante", "limpiador", "bolsa", "almacen", "generico"
+    );
     private static final List<String> METADATA_WORDS = List.of(
             "cuit", "direccion", "responsable", "consumidor", "actividad", "fecha", "hora", "nro", "ing.", "iva", "cod.", "pv", "tique",
             "seshia", "orientacion", "transparencia", "fiscal", "regimen", "afip", "cliente", "cantidad", "descripcion", "importe",
@@ -103,11 +121,13 @@ public class ReceiptParserService {
                 : extractItems(lines, storeName, date, warnings));
         items.addAll(recoverFromMemory(lines, storeName, date, warnings, items));
         items.replaceAll(item -> applyLearned(item, storeName));
+        String total = calculateTotal(items);
 
         return new ExtractResponse(
                 storeName,
                 date,
                 items.size(),
+                total,
                 DelimitedExporter.toPipeSeparated(items),
                 DelimitedExporter.toTabSeparated(items),
                 DelimitedExporter.toTabSeparatedWithoutHeader(items),
@@ -117,6 +137,19 @@ public class ReceiptParserService {
                 null,
                 warnings
         );
+    }
+
+    private String calculateTotal(List<ReceiptItem> items) {
+        BigDecimal total = BigDecimal.ZERO;
+        for (ReceiptItem item : items) {
+            if (item.precioUnitario().isBlank()) {
+                continue;
+            }
+            BigDecimal unitPrice = BigDecimal.valueOf(parseAmount(item.precioUnitario()));
+            BigDecimal quantity = BigDecimal.valueOf(parseQuantity(item.cantidad()).orElse(1.0));
+            total = total.add(unitPrice.multiply(quantity));
+        }
+        return formatAmount(total.setScale(2, RoundingMode.HALF_UP).doubleValue());
     }
 
     private List<ReceiptItem> extractItems(List<String> lines, String storeName, String date, List<String> warnings) {
@@ -135,7 +168,7 @@ public class ReceiptParserService {
             if (isLikelyDescriptionOnly(line, normalized) && index + 1 < lines.size()) {
                 String nextLine = cleanOcrNoise(lines.get(index + 1));
                 if (PRICE_ONLY_PATTERN.matcher(nextLine).matches() && isLikelyProductLine(line, normalized)) {
-                    items.add(buildItem(line, nextLine, storeName, date, isAmbiguousLine(line, normalized), line));
+                    items.add(buildItem(line, nextLine, storeName, date, isAmbiguousLine(line, normalized), line, warnings));
                     index++;
                     continue;
                 }
@@ -149,14 +182,14 @@ public class ReceiptParserService {
             Matcher puntaDeAguaMatcher = PUNTA_DE_AGUA_CREMOSO_PATTERN.matcher(line);
             if (puntaDeAguaMatcher.matches()) {
                 items.add(buildItem(puntaDeAguaMatcher.group(1), puntaDeAguaMatcher.group(2), storeName, date,
-                        isAmbiguousLine(line, normalized), line));
+                        isAmbiguousLine(line, normalized), line, warnings));
                 continue;
             }
 
             Optional<ParsedItemLine> parsedItemLine = parseItemLineWithMoney(line);
             if (parsedItemLine.isPresent() && isLikelyProductLine(parsedItemLine.get().description(), normalized)) {
                 items.add(buildItem(parsedItemLine.get().description(), parsedItemLine.get().price(), storeName, date,
-                        isAmbiguousLine(line, normalized), line));
+                        isAmbiguousLine(line, normalized), line, warnings));
                 continue;
             }
 
@@ -181,30 +214,34 @@ public class ReceiptParserService {
                 continue;
             }
 
-            items.add(buildItem(rawDescription, rawPrice, storeName, date, isAmbiguousLine(line, normalized), line));
+            items.add(buildItem(rawDescription, rawPrice, storeName, date, isAmbiguousLine(line, normalized), line, warnings));
         }
 
         return items;
     }
 
-    private ReceiptItem buildItem(String rawDescription, String rawPrice, String storeName, String date, boolean ambiguous, String sourceLine) {
+    private ReceiptItem buildItem(String rawDescription, String rawPrice, String storeName, String date,
+                                  boolean ambiguous, String sourceLine, List<String> warnings) {
         int quantity = detectQuantity(rawDescription);
         double totalPrice = parseAmount(rawPrice);
         double unitPrice = quantity > 0 ? totalPrice / quantity : totalPrice;
         String cleanedDescription = beautifyDescription(rawDescription);
-        BrandMatch brandMatch = detectBrand(cleanedDescription);
-        String brand = brandMatch.brand();
+        BrandMatch brandMatch = detectBrand(cleanedDescription, rawDescription);
+        if (brandMatch.reviewRequired()) {
+            warnings.add("Marca aproximada: " + brandMatch.reviewLabel());
+        }
+        String brand = normalizeBrand(brandMatch.brand());
         String descriptionWithoutBrand = expandProductDescription(removeBrandFromDescription(cleanedDescription, brandMatch), brand);
 
         return new ReceiptItem(
                 descriptionWithoutBrand,
                 brand,
                 storeName,
-                "Supermercado",
+                categoryForStore(storeName),
                 String.valueOf(quantity),
                 formatAmount(unitPrice),
                 normalizeDate(date),
-                ambiguous ? "AMBIGUOUS" : "CORRECT",
+                ambiguous || brandMatch.reviewRequired() ? "AMBIGUOUS" : "CORRECT",
                 signatureFor(sourceLine)
         );
     }
@@ -278,7 +315,7 @@ public class ReceiptParserService {
     }
 
     private boolean isLikelyPedidosYaProductLine(String line, String normalized) {
-        if (line.length() < 5 || containsMetadata(normalized)) {
+        if (line.length() < 5 || containsMetadata(normalized) || isSummaryLine(normalized)) {
             return false;
         }
         if (normalized.matches("[0-9 kg]+")) {
@@ -303,7 +340,7 @@ public class ReceiptParserService {
         if (containsMetadata(normalized)
                 || normalized.contains("off")
                 || normalized.contains("market")
-                || normalized.contains("subtotal")
+                || isSummaryLine(normalized)
                 || normalized.contains("total")) {
             return Optional.empty();
         }
@@ -390,9 +427,9 @@ public class ReceiptParserService {
     private ReceiptItem buildPedidosYaItem(String rawDescription, String rawPrice, String quantity, String storeName, String date, boolean ambiguous, String sourceLine) {
         String cleanedDescription = beautifyDescription(rawDescription);
         BrandMatch brandMatch = brandCatalog.findAnywhereIn(cleanedDescription)
-                .map(match -> new BrandMatch(match.brand(), match.normalizedAlias()))
-                .orElse(new BrandMatch("Generico", ""));
-        String brand = brandMatch.brand();
+                .map(match -> new BrandMatch(match.brand(), match.normalizedAlias(), false, false, ""))
+                .orElse(new BrandMatch("Genérico", "", false, false, ""));
+        String brand = normalizeBrand(brandMatch.brand());
         String descriptionWithoutBrand = expandProductDescription(removeBrandFromDescription(cleanedDescription, brandMatch), brand);
         double totalPrice = parseAmount(rawPrice);
         double numericQuantity = parseQuantity(quantity).orElse(1.0);
@@ -401,7 +438,7 @@ public class ReceiptParserService {
                 descriptionWithoutBrand,
                 brand,
                 storeName,
-                "Supermercado",
+                categoryForStore(storeName),
                 quantity,
                 formatAmount(totalPrice / numericQuantity),
                 normalizeDate(date),
@@ -418,6 +455,10 @@ public class ReceiptParserService {
         return normalizeForDetection(withoutPrices);
     }
 
+    private String categoryForStore(String storeName) {
+        return STORE_CATEGORIES.getOrDefault(normalizeForDetection(storeName), "Supermercado");
+    }
+
     private ReceiptItem applyLearned(ReceiptItem item, String storeName) {
         if (item.firma().isBlank()) {
             return item;
@@ -428,9 +469,9 @@ public class ReceiptParserService {
         }
         return new ReceiptItem(
                 entry.descripcion(),
-                entry.marca(),
+                entry.marca().isBlank() ? item.marca() : normalizeBrand(entry.marca()),
                 item.lugarDeCompra(),
-                entry.categoria(),
+                entry.categoria().isBlank() ? item.categoria() : entry.categoria(),
                 item.cantidad(),
                 item.precioUnitario(),
                 item.fecha(),
@@ -452,7 +493,8 @@ public class ReceiptParserService {
                 continue;
             }
             String normalized = normalizeForDetection(rawLine);
-            if (containsMetadata(normalized) || STOP_WORDS.stream().anyMatch(normalized::contains)) {
+            if (containsMetadata(normalized) || isSummaryLine(normalized)
+                    || STOP_WORDS.stream().anyMatch(normalized::contains)) {
                 continue;
             }
             CorrectionMemory.Entry entry = correctionMemory.find(storeName, firma);
@@ -484,9 +526,9 @@ public class ReceiptParserService {
         String unitPrice = rawPrice.isBlank() ? "" : formatAmount(parseAmount(rawPrice));
         return new ReceiptItem(
                 entry.descripcion(),
-                entry.marca(),
+                normalizeBrand(entry.marca()),
                 storeName,
-                entry.categoria(),
+                entry.categoria().isBlank() ? categoryForStore(storeName) : entry.categoria(),
                 "1",
                 unitPrice,
                 normalizeDate(date),
@@ -615,7 +657,11 @@ public class ReceiptParserService {
         if (containsMetadata(normalized)) {
             return true;
         }
-        return STOP_WORDS.stream().anyMatch(normalized::contains);
+        return isSummaryLine(normalized) || STOP_WORDS.stream().anyMatch(normalized::contains);
+    }
+
+    private boolean isSummaryLine(String normalized) {
+        return normalized.replace(" ", "").contains("subtot");
     }
 
     private boolean containsMetadata(String normalized) {
@@ -634,7 +680,8 @@ public class ReceiptParserService {
 
     private boolean isLikelyProductLine(String description, String normalizedLine) {
         String normalizedDescription = normalizeForDetection(description);
-        if (containsMetadata(normalizedDescription) || STOP_WORDS.stream().anyMatch(normalizedDescription::contains)) {
+        if (containsMetadata(normalizedDescription) || isSummaryLine(normalizedDescription)
+                || STOP_WORDS.stream().anyMatch(normalizedDescription::contains)) {
             return false;
         }
         long letters = description.chars().filter(Character::isLetter).count();
@@ -705,29 +752,78 @@ public class ReceiptParserService {
         return toTitleCase(cleaned);
     }
 
-    private BrandMatch detectBrand(String description) {
+    private BrandMatch detectBrand(String description, String rawDescription) {
+        String firstWord = rawDescription == null ? "" : rawDescription.trim().split("\\s+")[0];
+        String normalizedFirstWord = normalizeForDetection(firstWord);
+        if (NON_BRAND_PREFIXES.contains(normalizedFirstWord)) {
+            return new BrandMatch("Genérico", "", false, false, "");
+        }
+
         Optional<BrandMatch> knownBrand = brandCatalog.findIn(description)
-                .map(match -> new BrandMatch(match.brand(), match.normalizedAlias()));
+                .map(match -> new BrandMatch(match.brand(), match.normalizedAlias(), false, false, ""));
         if (knownBrand.isPresent()) {
             return knownBrand.get();
         }
 
-        String[] parts = description.split(" ");
-        if (parts.length == 0) {
-            return new BrandMatch("Sin marca", "");
+        Optional<BrandCatalog.FuzzyBrandMatch> fuzzy = brandCatalog.findFuzzyAtStart(rawDescription);
+        if (fuzzy.isPresent()) {
+            if (fuzzy.get().percentage() > 70.0) {
+                return new BrandMatch(
+                        fuzzy.get().brand(),
+                        normalizedFirstWord,
+                        true,
+                        false,
+                        ""
+                );
+            }
+            if (fuzzy.get().percentage() >= 30.0) {
+                return new BrandMatch(
+                        toTitleCase(firstWord),
+                        normalizedFirstWord,
+                        true,
+                        true,
+                        firstWord + " -> " + fuzzy.get().brand()
+                                + " (" + Math.round(fuzzy.get().percentage()) + "%)"
+                );
+            }
+            return new BrandMatch("Genérico", "", false, false, "");
         }
-        if (parts.length > 1 && parts[0].length() <= 3) {
-            String brand = toTitleCase(parts[0] + " " + parts[1]);
-            brandCatalog.remember(brand);
-            return new BrandMatch(brand, normalizeForDetection(parts[0] + " " + parts[1]));
+
+        Optional<BrandCatalog.FuzzyBrandMatch> bestFuzzy = brandCatalog.findBestFuzzyAtStart(rawDescription);
+        if (bestFuzzy.isPresent() && bestFuzzy.get().percentage() < 30.0) {
+            return new BrandMatch("Genérico", "", false, false, "");
         }
-        String brand = toTitleCase(parts[0]);
-        brandCatalog.remember(brand);
-        return new BrandMatch(brand, normalizeForDetection(parts[0]));
+
+        if (firstWord.matches("[A-ZÁÉÍÓÚÑÜ&'.-]{4,}")
+                && !NON_BRAND_PREFIXES.contains(normalizedFirstWord)) {
+            return new BrandMatch(
+                    toTitleCase(firstWord),
+                    normalizedFirstWord,
+                    false,
+                    false,
+                    ""
+            );
+        }
+
+        return new BrandMatch("Genérico", "", false, false, "");
+    }
+
+    private String firstWord(String value) {
+        return value == null || value.isBlank() ? "" : value.trim().split("\\s+")[0];
+    }
+
+    private String normalizeBrand(String brand) {
+        return brand == null || brand.isBlank() || brand.equalsIgnoreCase("Sin marca")
+                ? "Genérico"
+                : brand;
+    }
+
+    private boolean isGenericBrand(String brand) {
+        return brand != null && normalizeForDetection(brand).equals("generico");
     }
 
     private String removeBrandFromDescription(String description, BrandMatch brandMatch) {
-        if (brandMatch.normalizedAlias().isBlank() || brandMatch.brand().equals("Sin marca")) {
+        if (brandMatch.normalizedAlias().isBlank() || isGenericBrand(brandMatch.brand())) {
             return description;
         }
 
@@ -833,6 +929,7 @@ public class ReceiptParserService {
     }
 
     private String expandProductDescription(String description, String brand) {
+        description = description == null ? "" : description.trim();
         String normalizedDescription = normalizeForDetection(description);
         if (normalizeForDetection(brand).equals("punta del agua") && normalizedDescription.contains("cr")) {
             String specs = extractProductSpecs(description);
@@ -905,7 +1002,8 @@ public class ReceiptParserService {
         return builder.toString();
     }
 
-    private record BrandMatch(String brand, String normalizedAlias) {
+    private record BrandMatch(String brand, String normalizedAlias, boolean approximate, boolean reviewRequired,
+                              String reviewLabel) {
     }
 
     private record ProductRule(String description, List<String> aliases) {

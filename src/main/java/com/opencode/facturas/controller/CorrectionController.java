@@ -36,6 +36,9 @@ public class CorrectionController {
             if (correction.firma().isBlank()) {
                 continue;
             }
+            if (isGeneric(correction.marcaOriginal()) || isGeneric(correction.marca())) {
+                continue;
+            }
             correctionMemory.upsert(
                     request.store(),
                     correction.firma(),
@@ -50,12 +53,20 @@ public class CorrectionController {
     }
 
     private void rememberBrandIfValid(String marca) {
-        if (marca == null || marca.isBlank()
-                || marca.equalsIgnoreCase("Sin marca")
-                || marca.equalsIgnoreCase("Generico")) {
+        if (marca == null || marca.isBlank() || isGeneric(marca) || marca.equalsIgnoreCase("Sin marca")) {
             return;
         }
         brandCatalog.remember(marca);
+    }
+
+    private boolean isGeneric(String marca) {
+        if (marca == null) {
+            return false;
+        }
+        return java.text.Normalizer.normalize(marca, java.text.Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "")
+                .trim()
+                .equalsIgnoreCase("generico");
     }
 
     public record LearnResponse(int saved) {

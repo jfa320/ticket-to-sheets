@@ -115,14 +115,14 @@ public class CorrectionMemory {
                     storeClean,
                     firmaKey,
                     fallback(descripcion, current.descripcion()),
-                    fallback(marca, current.marca()),
+                    fallbackMemoryBrand(marca, current.marca()),
                     fallback(categoria, current.categoria()),
                     current.veces() + 1,
                     today
             );
             entries.set(entries.indexOf(current), updated);
         } else {
-            entries.add(new Entry(storeClean, firmaKey, clean(descripcion), clean(marca), clean(categoria), 1, today));
+            entries.add(new Entry(storeClean, firmaKey, clean(descripcion), cleanMemoryBrand(marca), clean(categoria), 1, today));
         }
         save();
     }
@@ -155,6 +155,16 @@ public class CorrectionMemory {
     private String fallback(String value, String current) {
         String cleaned = clean(value);
         return cleaned.isBlank() ? clean(current) : cleaned;
+    }
+
+    private String fallbackMemoryBrand(String value, String current) {
+        String cleaned = cleanMemoryBrand(value);
+        return cleaned.isBlank() ? cleanMemoryBrand(current) : cleaned;
+    }
+
+    private String cleanMemoryBrand(String value) {
+        String cleaned = clean(value);
+        return normalize(cleaned).equals("generico") ? "" : cleaned;
     }
 
     private String clean(String value) {

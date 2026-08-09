@@ -127,7 +127,7 @@ Excluido: `.git`, `target`, logs, caches, outputs de build.
 ## Principales entidades de dominio y relaciones
 
 - `ReceiptItem`: fila de producto extraida. Campos: `descripcion`, `marca`, `lugarDeCompra`, `categoria`, `cantidad`, `precioUnitario`, `fecha`, `estado`, `firma`.
-- `ExtractResponse`: respuesta completa del endpoint. Contiene metadata (`storeName`, `date`, `itemCount`), exportaciones (`csv`, `tsv`, `tsvWithoutHeader`), `rawText`, `items`, `warnings`, `variant` y `score` OCR.
+- `ExtractResponse`: respuesta completa del endpoint. Contiene metadata (`storeName`, `date`, `itemCount`, `total` calculado desde los items), exportaciones (`csv`, `tsv`, `tsvWithoutHeader`), `rawText`, `items`, `warnings`, `variant` y `score` OCR.
 - `OcrResult`: resultado OCR estructurado recibido desde Python, con `text`, `lines`, `detections`, `variant` y `score`.
 - `OcrLine`: linea OCR mergeada con texto, confidence/score y geometria basica.
 - `OcrDetection`: deteccion cruda OCR con texto, confidence y bounding box de 4 puntos.
@@ -248,10 +248,15 @@ No existe BPM/Flowable. No hay dependencias, archivos BPMN, procesos ni integrac
 14. `app.js` renderiza comercio, fecha, cantidad de items, advertencias, tabla editable y texto OCR crudo; botones copian al portapapeles.
 15. `app.js` compara cada item editado contra el snapshot original y, con debounce, envia a `POST /api/corrections` solo los campos marca/categoria/descripcion que cambiaron.
 16. `ReceiptParserService` consulta `CorrectionMemory` para aplicar lo aprendido (override) y recuperar lineas perdidas (warnings "Recuperado de memoria").
+17. Las lineas `subtotal`, `subtot` y variantes se descartan como resumen, nunca como item; si no se reconoce una marca, se usa `Generico`.
+18. `total` se calcula sumando `cantidad * precioUnitario` de los items extraidos, nunca leyendo el total del OCR; la UI lo recalcula al editar o deseleccionar filas.
+19. `BrandCatalog` aplica Levenshtein sobre la primera palabra: menos de 30% produce `Genérico`, 30%-70% deja la palabra OCR editable con warning y más de 70% aplica la marca del catálogo.
+20. La memoria solo aprende filas cuya marca original no era `Genérico` y cuyo resultado es una marca real; una fila originalmente `Genérico` no guarda ninguna edición.
+21. La categoría base se determina por comercio: `Los Tres Corazones`, `PedidosYa Market - San Miguel II` y `Tienda Filipa` usan `Supermercado`; `Perfumerías Pigmento` usa `Perfumeria`; `Central de Sabores` usa `Panaderia`; `Estancia San Francisco` usa `Otros`; `Farmacias TKL San Miguel` usa `Farmacia`; y `Tuti Fruti` usa `Verduleria`. Una categoría vacía en memoria nunca borra la categoría detectada.
 
 ## Frontend
 
-- `index.html`: pagina unica con hero, dropzone, boton de extraccion, paneles de metadata, advertencias, tabla editable, botones de copia y textareas para outputs.
+- `index.html`: pagina unica orientada a usuario final, con carga de archivo, metadata, advertencias accionables, tabla editable, total calculado, botones de copia y texto original oculto en un desplegable de diagnostico.
 - `styles.css`: estilos responsive, tema visual beige/verde, tipografias Manrope y Space Grotesk, layout de paneles y media query para mobile.
 - `app.js`: controla estado de seleccion de archivo, submit async, llamada al backend, manejo de errores `{message}`, render de items/warnings con badge `Memorizado`, regeneracion de salidas desde la tabla, envio automatico de correcciones con debounce y copia con `navigator.clipboard.writeText`.
 
