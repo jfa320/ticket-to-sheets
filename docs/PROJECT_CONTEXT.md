@@ -49,6 +49,8 @@ No hay `package.json`; no hay build frontend npm.
 - Las reglas actuales de ambiguedad son textuales. Confidence y geometria OCR quedan disponibles para una fase posterior.
 - PedidosYa tolera errores OCR frecuentes en el encabezado (`PodidosYa`) y descarta bloques de interfaz como `Tu pedido`, `Tu pago`, descuentos y detalles de entrega.
 - Se agrego una regresion OCR reproducible en `test-data/receipts/pedidosya/pedidosya-market-san-miguel-ii-ocr.txt`; la imagen original del caso no estaba disponible como archivo en el workspace.
+- `ReceiptItem.firma` identifica la linea OCR normalizada que origino cada fila y sirve de llave para el aprendizaje.
+- El sistema aprende correcciones de marca, categoria y descripcion por comercio, las persiste en `data/corrections.json` y las reutiliza en el proximo ticket (override o recuperacion de filas perdidas), marcando los items aplicados como `LEARNED`.
 
 ## Arquitectura general
 
@@ -124,7 +126,7 @@ Excluido: `.git`, `target`, logs, caches, outputs de build.
 
 ## Principales entidades de dominio y relaciones
 
-- `ReceiptItem`: fila de producto extraida. Campos: `descripcion`, `marca`, `lugarDeCompra`, `categoria`, `cantidad`, `precioUnitario`, `fecha`, `estado`.
+- `ReceiptItem`: fila de producto extraida. Campos: `descripcion`, `marca`, `lugarDeCompra`, `categoria`, `cantidad`, `precioUnitario`, `fecha`, `estado`, `firma`.
 - `ExtractResponse`: respuesta completa del endpoint. Contiene metadata (`storeName`, `date`, `itemCount`), exportaciones (`csv`, `tsv`, `tsvWithoutHeader`), `rawText`, `items`, `warnings`, `variant` y `score` OCR.
 - `OcrResult`: resultado OCR estructurado recibido desde Python, con `text`, `lines`, `detections`, `variant` y `score`.
 - `OcrLine`: linea OCR mergeada con texto, confidence/score y geometria basica.
@@ -156,12 +158,17 @@ Endpoints del microservicio OCR Python:
 - `POST /ocr`: recibe bytes de imagen, header opcional `X-OCR-Language`, responde JSON `{ text, lines, detections, variant, score }` o `{ error }`.
 - `GET /health`: responde `{ status: "ok", ocrReady: boolean }`.
 
+Endpoint de aprendizaje:
+
+- `POST /api/corrections`: recibe JSON `{ store, corrections: [{ firma, descripcion, marca, categoria }] }`, persiste la correccion en `CorrectionMemory` y registra la marca en `BrandCatalog`; responde `{ saved }`.
+
 ## Services principales
 
 - `OcrService`: integra Spring con OCR. Detecta PDF por extension `.pdf`, renderiza cada pagina con PDFBox a 300 DPI, preprocesa imagenes a escala de grises/contraste/padding, serializa PNG y llama al microservicio OCR. Devuelve `OcrResult` estructurado y mantiene `extractText` como compatibilidad. Usa `RestTemplate` con timeouts configurables y espera/reintenta contra `/health` hasta `app.ocr.max-attempts`.
 - `ReceiptParserService`: parsea texto OCR. Extrae fecha, comercio, items, cantidades, precios, marcas, descripciones normalizadas y exportaciones. Tiene reglas generales para tickets y un camino especial para PedidosYa Market. La categoria se fija como `Supermercado`.
 - `BrandCatalog`: carga `data/brands.json`, busca marcas por alias al inicio o en cualquier parte de la descripcion y puede recordar marcas nuevas escribiendo el JSON. Ignora varias marcas genericas/no validas.
 - `StoreNameMapper`: carga `store-mappings.json` desde classpath, normaliza texto OCR y resuelve nombres canonicos de comercio. Tiene reglas hardcodeadas para variantes de `Zou Wenguo`/`Los Tres Corazones`.
+- `CorrectionMemory`: persiste en `data/corrections.json` entradas `{ store, firma, descripcion, marca, categoria, veces, ultimaVez }`. `find(store, firma)` matchea por igualdad exacta, substring compacta o solapamiento de tokens, siempre con alcance de comercio; `upsert` incrementa `veces` y conserva campos previos si no vienen valores nuevos. No crea el archivo hasta la primera escritura.
 
 ## Repositories/DAOs relevantes
 
@@ -170,15 +177,17 @@ No existen repositories ni DAOs. No hay Spring Data, JDBC ni JPA en el `pom.xml`
 Persistencia presente:
 
 - `data/brands.json` es leido y potencialmente modificado por `BrandCatalog.remember` en runtime.
+- `data/corrections.json` es leido y modificado por `CorrectionMemory.upsert`; no se versiona en git.
 - `store-mappings.json` es recurso readonly de classpath para aliases de comercios.
 
-Inferencia: `data/brands.json` funciona como un pequeno almacenamiento local de conocimiento de marcas, no como base de datos transaccional.
+Inferencia: `data/brands.json` y `data/corrections.json` funcionan como almacenamiento local de conocimiento, no como base de datos transaccional.
 
 ## DTOs y mappings importantes
 
 - `ExtractResponse`: DTO de salida del endpoint `/api/receipts/extract`, incluyendo `variant` y `score` OCR cuando vienen del flujo completo.
 - `OcrResult`, `OcrLine`, `OcrDetection`: DTOs internos para conservar metadata estructurada del OCR en Java.
 - `ReceiptItem`: DTO/fila de producto.
+- `CorrectionsRequest`: DTO de entrada de `POST /api/corrections`, con `store` y lista de `Correction(firma, descripcion, marca, categoria)`.
 - `DelimitedExporter`: mapea `List<ReceiptItem>` a texto delimitado con headers. Campos exportados: `Descripcion`, `Marca`, `Lugar de compra`, `Categoria`, `Cantidad`, `Precio unitario`, `Fecha`.
 - `StoreNameMapper`: mapping de nombres detectados a nombres canonicos, por ejemplo `zou wenguo` -> `Los Tres Corazones`, `tienda filipa s r l` -> `Tienda Filipa`.
 - `BrandCatalog`: mapping de alias/marcas desde `data/brands.json`; agrega aliases especiales para `La Providencia`, `Frutigram` y `Union Ganadera`.
@@ -236,13 +245,15 @@ No existe BPM/Flowable. No hay dependencias, archivos BPMN, procesos ni integrac
 11. Java conserva la metadata en `OcrResult`; el parser todavia usa `ocrResult.text()` como entrada.
 12. `ReceiptParserService.parse` normaliza lineas, extrae fecha/comercio e items. Para PedidosYa usa reglas especificas; para tickets comunes usa patrones de precio/descripcion.
 13. `DelimitedExporter` genera salidas pipe-separated, TSV con header y TSV sin header.
-14. `app.js` renderiza comercio, fecha, cantidad de items, salidas delimitadas y texto OCR crudo; botones copian al portapapeles.
+14. `app.js` renderiza comercio, fecha, cantidad de items, advertencias, tabla editable y texto OCR crudo; botones copian al portapapeles.
+15. `app.js` compara cada item editado contra el snapshot original y, con debounce, envia a `POST /api/corrections` solo los campos marca/categoria/descripcion que cambiaron.
+16. `ReceiptParserService` consulta `CorrectionMemory` para aplicar lo aprendido (override) y recuperar lineas perdidas (warnings "Recuperado de memoria").
 
 ## Frontend
 
 - `index.html`: pagina unica con hero, dropzone, boton de extraccion, paneles de metadata, advertencias, tabla editable, botones de copia y textareas para outputs.
 - `styles.css`: estilos responsive, tema visual beige/verde, tipografias Manrope y Space Grotesk, layout de paneles y media query para mobile.
-- `app.js`: controla estado de seleccion de archivo, submit async, llamada al backend, manejo de errores `{message}`, render de items/warnings, regeneracion de salidas desde la tabla y copia con `navigator.clipboard.writeText`.
+- `app.js`: controla estado de seleccion de archivo, submit async, llamada al backend, manejo de errores `{message}`, render de items/warnings con badge `Memorizado`, regeneracion de salidas desde la tabla, envio automatico de correcciones con debounce y copia con `navigator.clipboard.writeText`.
 
 Comunicacion con backend:
 
@@ -256,7 +267,7 @@ No hay framework frontend, router, bundler ni servicios separados.
 
 - Tests Java con JUnit 5 via `spring-boot-starter-test`.
 - Tests principales: `ReceiptParserServiceTest` y `OcrServiceTest`.
-- Cobertura Java actual: 12 tests del parser y 1 del cliente OCR; tickets comunes, lineas OCR separadas, tickets largos, casos especiales de queso Punta del Agua, fechas, Tienda Filipa, PedidosYa Market con typos OCR, ambiguedad y parsing de OCR estructurado.
+- Cobertura Java actual: tests del parser, de `CorrectionMemory` y del cliente OCR; tickets comunes, lineas OCR separadas, tickets largos, casos especiales de queso Punta del Agua, fechas, Tienda Filipa, PedidosYa Market con typos OCR, ambiguedad, override/recuperacion de memoria y parsing de OCR estructurado.
 - Tests Python con `unittest` en `ocr/tests`: merge de filas OCR y preprocesamiento `without-lines`.
 - No hay tests para controller ni frontend.
 
@@ -311,7 +322,7 @@ npm:
 
 - `ReceiptParserService` concentra mucha logica heuristica en una unica clase grande; es dificil extender sin romper casos existentes.
 - Las reglas de productos, metadata, stop words, comercios especiales y aliases estan mezcladas entre codigo Java y JSON.
-- `BrandCatalog.remember` escribe en `data/brands.json` desde runtime. En Docker, el archivo queda dentro del contenedor salvo que se monte volumen; puede perderse al reconstruir imagen.
+- `BrandCatalog.remember` escribe en `data/brands.json` desde runtime. En Docker, con el volumen `./data:/app/data` montado en `compose.yaml`, `brands.json` y `corrections.json` persisten entre rebuilds.
 - El MVP no calcula ni exporta precio total; la salida queda limitada a siete columnas verificadas.
 - `ApiExceptionHandler` convierte errores de OCR/conectividad en HTTP 400; puede dificultar distinguir errores de usuario de errores de infraestructura.
 - `OcrService` detecta PDF solo por nombre de archivo terminado en `.pdf`, no por content type.
@@ -331,6 +342,8 @@ npm:
 | Parser de tickets | `ReceiptParserService.java` | Extrae fecha, comercio, items, marcas, cantidades y precios desde texto OCR. |
 | Catalogo marcas | `BrandCatalog.java`, `data/brands.json` | Busca, normaliza y recuerda marcas detectadas. |
 | Mapeo comercios | `StoreNameMapper.java`, `store-mappings.json` | Convierte aliases OCR de comercios a nombres canonicos. |
+| Memoria de correcciones | `CorrectionMemory.java`, `data/corrections.json` | Aprende y reutiliza correcciones de marca/categoria/descripcion por comercio. |
+| Endpoint aprendizaje | `CorrectionController.java`, `CorrectionsRequest.java` | Recibe correcciones del frontend y las persiste. |
 | DTO respuesta | `ExtractResponse.java` | JSON completo devuelto al frontend/API. |
 | DTO item | `ReceiptItem.java` | Representa una fila de producto extraida. |
 | Export delimitado | `DelimitedExporter.java` | Genera salida con `|`, TSV con header y TSV sin header. |

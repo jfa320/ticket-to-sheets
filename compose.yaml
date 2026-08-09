@@ -10,6 +10,8 @@ services:
       APP_OCR_LANGUAGE: es
     ports:
       - "8080:8080"
+    volumes:
+      - ./data:/app/data
     depends_on:
       - paddleocr
     restart: unless-stopped

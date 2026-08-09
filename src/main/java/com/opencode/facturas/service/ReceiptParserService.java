@@ -3,6 +3,7 @@ package com.opencode.facturas.service;
 import com.opencode.facturas.model.ExtractResponse;
 import com.opencode.facturas.model.ReceiptItem;
 import com.opencode.facturas.util.DelimitedExporter;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.text.DecimalFormat;
@@ -15,14 +16,17 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 @Service
 public class ReceiptParserService {
 
     private final StoreNameMapper storeNameMapper;
     private final BrandCatalog brandCatalog;
+    private final CorrectionMemory correctionMemory;
 
     private static final Pattern DATE_PATTERN = Pattern.compile("(\\d{1,2}\\s*[/-]\\s*\\d{1,2}(?:\\s*[/-]\\s*\\d{2,4})?)");
     private static final Pattern MONEY_PATTERN = Pattern.compile("(?:\\$\\s*\\d+[\\.,]\\d{5}|\\$\\s*\\d+(?:[\\.,]\\d{3})*(?:[\\.,]\\d{2})?|\\d+(?:[\\.,]\\d{3})*[\\.,]\\d{2})(?!\\d)");
@@ -75,8 +79,14 @@ public class ReceiptParserService {
     }
 
     public ReceiptParserService(StoreNameMapper storeNameMapper, BrandCatalog brandCatalog) {
+        this(storeNameMapper, brandCatalog, new CorrectionMemory(new com.fasterxml.jackson.databind.ObjectMapper()));
+    }
+
+    @Autowired
+    public ReceiptParserService(StoreNameMapper storeNameMapper, BrandCatalog brandCatalog, CorrectionMemory correctionMemory) {
         this.storeNameMapper = storeNameMapper;
         this.brandCatalog = brandCatalog;
+        this.correctionMemory = correctionMemory;
     }
 
     public ExtractResponse parse(String rawText) {
@@ -88,9 +98,11 @@ public class ReceiptParserService {
         String date = normalizeDate(extractDate(lines).orElse(""));
         String storeName = storeNameMapper.resolve(lines, detectStoreName(lines));
         List<String> warnings = new ArrayList<>();
-        List<ReceiptItem> items = isPedidosYa(lines)
+        List<ReceiptItem> items = new ArrayList<>(isPedidosYa(lines)
                 ? extractPedidosYaItems(lines, storeName, date, warnings)
-                : extractItems(lines, storeName, date, warnings);
+                : extractItems(lines, storeName, date, warnings));
+        items.addAll(recoverFromMemory(lines, storeName, date, warnings, items));
+        items.replaceAll(item -> applyLearned(item, storeName));
 
         return new ExtractResponse(
                 storeName,
@@ -123,7 +135,7 @@ public class ReceiptParserService {
             if (isLikelyDescriptionOnly(line, normalized) && index + 1 < lines.size()) {
                 String nextLine = cleanOcrNoise(lines.get(index + 1));
                 if (PRICE_ONLY_PATTERN.matcher(nextLine).matches() && isLikelyProductLine(line, normalized)) {
-                    items.add(buildItem(line, nextLine, storeName, date, isAmbiguousLine(line, normalized)));
+                    items.add(buildItem(line, nextLine, storeName, date, isAmbiguousLine(line, normalized), line));
                     index++;
                     continue;
                 }
@@ -137,14 +149,14 @@ public class ReceiptParserService {
             Matcher puntaDeAguaMatcher = PUNTA_DE_AGUA_CREMOSO_PATTERN.matcher(line);
             if (puntaDeAguaMatcher.matches()) {
                 items.add(buildItem(puntaDeAguaMatcher.group(1), puntaDeAguaMatcher.group(2), storeName, date,
-                        isAmbiguousLine(line, normalized)));
+                        isAmbiguousLine(line, normalized), line));
                 continue;
             }
 
             Optional<ParsedItemLine> parsedItemLine = parseItemLineWithMoney(line);
             if (parsedItemLine.isPresent() && isLikelyProductLine(parsedItemLine.get().description(), normalized)) {
                 items.add(buildItem(parsedItemLine.get().description(), parsedItemLine.get().price(), storeName, date,
-                        isAmbiguousLine(line, normalized)));
+                        isAmbiguousLine(line, normalized), line));
                 continue;
             }
 
@@ -169,13 +181,13 @@ public class ReceiptParserService {
                 continue;
             }
 
-            items.add(buildItem(rawDescription, rawPrice, storeName, date, isAmbiguousLine(line, normalized)));
+            items.add(buildItem(rawDescription, rawPrice, storeName, date, isAmbiguousLine(line, normalized), line));
         }
 
         return items;
     }
 
-    private ReceiptItem buildItem(String rawDescription, String rawPrice, String storeName, String date, boolean ambiguous) {
+    private ReceiptItem buildItem(String rawDescription, String rawPrice, String storeName, String date, boolean ambiguous, String sourceLine) {
         int quantity = detectQuantity(rawDescription);
         double totalPrice = parseAmount(rawPrice);
         double unitPrice = quantity > 0 ? totalPrice / quantity : totalPrice;
@@ -192,7 +204,8 @@ public class ReceiptParserService {
                 String.valueOf(quantity),
                 formatAmount(unitPrice),
                 normalizeDate(date),
-                ambiguous ? "AMBIGUOUS" : "CORRECT"
+                ambiguous ? "AMBIGUOUS" : "CORRECT",
+                signatureFor(sourceLine)
         );
     }
 
@@ -215,7 +228,7 @@ public class ReceiptParserService {
             if (inlineItem.isPresent()) {
                 PedidosYaInlineItem item = inlineItem.get();
                 items.add(buildPedidosYaItem(item.description(), item.price(), item.quantity(), storeName, date,
-                        isAmbiguousLine(line, normalized)));
+                        isAmbiguousLine(line, normalized), line));
                 continue;
             }
 
@@ -237,7 +250,7 @@ public class ReceiptParserService {
                 quantity = findPedidosYaQuantityInFollowingLines(lines, index + 1).orElse("1");
             }
             items.add(buildPedidosYaItem(productLine.description(), price.get(), quantity, storeName, date,
-                    isAmbiguousLine(line, normalized)));
+                    isAmbiguousLine(line, normalized), line));
         }
 
         return items;
@@ -374,7 +387,7 @@ public class ReceiptParserService {
         return Optional.empty();
     }
 
-    private ReceiptItem buildPedidosYaItem(String rawDescription, String rawPrice, String quantity, String storeName, String date, boolean ambiguous) {
+    private ReceiptItem buildPedidosYaItem(String rawDescription, String rawPrice, String quantity, String storeName, String date, boolean ambiguous, String sourceLine) {
         String cleanedDescription = beautifyDescription(rawDescription);
         BrandMatch brandMatch = brandCatalog.findAnywhereIn(cleanedDescription)
                 .map(match -> new BrandMatch(match.brand(), match.normalizedAlias()))
@@ -392,7 +405,93 @@ public class ReceiptParserService {
                 quantity,
                 formatAmount(totalPrice / numericQuantity),
                 normalizeDate(date),
-                ambiguous ? "AMBIGUOUS" : "CORRECT"
+                ambiguous ? "AMBIGUOUS" : "CORRECT",
+                signatureFor(sourceLine)
+        );
+    }
+
+    private String signatureFor(String sourceLine) {
+        if (sourceLine == null) {
+            return "";
+        }
+        String withoutPrices = MONEY_PATTERN.matcher(sourceLine).replaceAll(" ");
+        return normalizeForDetection(withoutPrices);
+    }
+
+    private ReceiptItem applyLearned(ReceiptItem item, String storeName) {
+        if (item.firma().isBlank()) {
+            return item;
+        }
+        CorrectionMemory.Entry entry = correctionMemory.find(storeName, item.firma());
+        if (entry == null) {
+            return item;
+        }
+        return new ReceiptItem(
+                entry.descripcion(),
+                entry.marca(),
+                item.lugarDeCompra(),
+                entry.categoria(),
+                item.cantidad(),
+                item.precioUnitario(),
+                item.fecha(),
+                "LEARNED",
+                item.firma()
+        );
+    }
+
+    private List<ReceiptItem> recoverFromMemory(List<String> lines, String storeName, String date, List<String> warnings, List<ReceiptItem> items) {
+        Set<String> presentFirmas = items.stream()
+                .map(ReceiptItem::firma)
+                .filter(firma -> !firma.isBlank())
+                .collect(Collectors.toSet());
+
+        List<ReceiptItem> recovered = new ArrayList<>();
+        for (String rawLine : lines) {
+            String firma = signatureFor(rawLine);
+            if (firma.isBlank() || presentFirmas.contains(firma)) {
+                continue;
+            }
+            String normalized = normalizeForDetection(rawLine);
+            if (containsMetadata(normalized) || STOP_WORDS.stream().anyMatch(normalized::contains)) {
+                continue;
+            }
+            CorrectionMemory.Entry entry = correctionMemory.find(storeName, firma);
+            if (entry == null) {
+                continue;
+            }
+            warnings.add("Recuperado de memoria: " + rawLine);
+            recovered.add(buildItemFromMemory(entry, findPriceInLineOrNext(rawLine, lines), storeName, date));
+        }
+        return recovered;
+    }
+
+    private String findPriceInLineOrNext(String rawLine, List<String> lines) {
+        Matcher matcher = MONEY_PATTERN.matcher(rawLine);
+        if (matcher.find()) {
+            return matcher.group();
+        }
+        int index = lines.indexOf(rawLine);
+        for (int i = index + 1; i < Math.min(lines.size(), index + 3); i++) {
+            Matcher next = MONEY_PATTERN.matcher(lines.get(i));
+            if (next.find()) {
+                return next.group();
+            }
+        }
+        return "";
+    }
+
+    private ReceiptItem buildItemFromMemory(CorrectionMemory.Entry entry, String rawPrice, String storeName, String date) {
+        String unitPrice = rawPrice.isBlank() ? "" : formatAmount(parseAmount(rawPrice));
+        return new ReceiptItem(
+                entry.descripcion(),
+                entry.marca(),
+                storeName,
+                entry.categoria(),
+                "1",
+                unitPrice,
+                normalizeDate(date),
+                "LEARNED",
+                entry.firma()
         );
     }
 

@@ -33,6 +33,9 @@ env/
 # Local receipt test corpus (may contain personal data)
 test-data/
 
+# Learned corrections (personal usage data, regenerated locally)
+data/corrections.json
+
 # IDE and OS files
 .idea/
 .vscode/

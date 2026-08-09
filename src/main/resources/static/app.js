@@ -15,6 +15,9 @@ const emptyItems = document.getElementById('emptyItems');
 const warningsPanel = document.getElementById('warningsPanel');
 const warningsList = document.getElementById('warningsList');
 let editableItems = [];
+let storeNameForLearn = '';
+let originalsByFirma = new Map();
+let learnTimer = null;
 updateSubmitButton();
 
 document.getElementById('copyPipe').addEventListener('click', () => copyText(csvOutput.value, 'CSV con | copiado.'));
@@ -58,6 +61,9 @@ form.addEventListener('submit', async (event) => {
         window.lastRowsOnly = payload.tsvWithoutHeader || '';
         rawOutput.value = payload.rawText || '';
         editableItems = (payload.items || []).map(item => ({...item}));
+        originalsByFirma = new Map((payload.items || []).map(item => [item.firma, item]));
+        storeNameForLearn = payload.storeName || '';
+        clearTimeout(learnTimer);
         renderWarnings(payload.warnings || []);
         renderItems();
         results.classList.remove('hidden');
@@ -151,6 +157,7 @@ function renderItems() {
                 cell.addEventListener('input', () => {
                     item[field] = cell.textContent.trim();
                     refreshExports();
+                    scheduleLearn();
                 });
             } else {
                 cell.classList.add('readonly-cell');
@@ -160,8 +167,17 @@ function renderItems() {
 
         const stateCell = document.createElement('td');
         const badge = document.createElement('span');
-        badge.className = `status-badge ${item.estado === 'AMBIGUOUS' ? 'status-ambiguous' : 'status-correct'}`;
-        badge.textContent = item.estado === 'AMBIGUOUS' ? 'Ambiguo' : 'Correcto';
+        let badgeClass = 'status-correct';
+        let badgeText = 'Correcto';
+        if (item.estado === 'AMBIGUOUS') {
+            badgeClass = 'status-ambiguous';
+            badgeText = 'Ambiguo';
+        } else if (item.estado === 'LEARNED') {
+            badgeClass = 'status-learned';
+            badgeText = 'Memorizado';
+        }
+        badge.className = `status-badge ${badgeClass}`;
+        badge.textContent = badgeText;
         stateCell.append(badge);
         row.append(stateCell);
 
@@ -200,4 +216,69 @@ function escapeDelimited(value, delimiter) {
     return safe.includes(delimiter) || safe.includes('\n') || safe.includes('"')
         ? `"${safe.replaceAll('"', '""')}"`
         : safe;
+}
+
+function scheduleLearn() {
+    if (!storeNameForLearn) {
+        return;
+    }
+    clearTimeout(learnTimer);
+    learnTimer = setTimeout(sendCorrections, 2000);
+}
+
+function sendCorrections() {
+    if (!storeNameForLearn) {
+        return;
+    }
+    const corrections = [];
+    editableItems.forEach(item => {
+        if (!item.firma) {
+            return;
+        }
+        const original = originalsByFirma.get(item.firma);
+        if (!original) {
+            return;
+        }
+        const diffs = {};
+        ['descripcion', 'marca', 'categoria'].forEach(field => {
+            if ((item[field] || '') !== (original[field] || '')) {
+                diffs[field] = item[field] || '';
+            }
+        });
+        if (Object.keys(diffs).length === 0) {
+            return;
+        }
+        diffs.firma = item.firma;
+        corrections.push(diffs);
+    });
+
+    if (corrections.length === 0) {
+        return;
+    }
+
+    fetch('/api/corrections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ store: storeNameForLearn, corrections })
+    }).then(response => {
+        if (!response.ok) {
+            throw new Error('No se pudieron aprender las correcciones.');
+        }
+        return response.json();
+    }).then(() => {
+        corrections.forEach(correction => {
+            const original = originalsByFirma.get(correction.firma);
+            if (!original) {
+                return;
+            }
+            ['descripcion', 'marca', 'categoria'].forEach(field => {
+                if (correction[field] !== undefined) {
+                    original[field] = correction[field];
+                }
+            });
+        });
+        statusLabel.textContent = 'Correcciones aprendidas para próximos tickets.';
+    }).catch(error => {
+        statusLabel.textContent = `Aviso: ${cleanError(error.message)}`;
+    });
 }

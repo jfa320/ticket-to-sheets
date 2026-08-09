@@ -2,15 +2,24 @@ package com.opencode.facturas;
 
 import com.opencode.facturas.service.StoreNameMapper;
 import com.opencode.facturas.model.ExtractResponse;
+import com.opencode.facturas.model.ReceiptItem;
+import com.opencode.facturas.service.BrandCatalog;
+import com.opencode.facturas.service.CorrectionMemory;
 import com.opencode.facturas.service.ReceiptParserService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.core.io.ClassPathResource;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ReceiptParserServiceTest {
+
+    @TempDir
+    Path tempDir;
 
     private final ReceiptParserService parserService = new ReceiptParserService(
             new StoreNameMapper(new ObjectMapper(), new ClassPathResource("store-mappings.json"))
@@ -341,5 +350,80 @@ class ReceiptParserServiceTest {
         assertTrue(response.warnings().isEmpty(), response.warnings().toString());
         assertTrue(response.csv().contains("Paty|PedidosYa Market - San Miguel II|Supermercado|1|6117,30|"), response.csv());
         assertTrue(response.csv().contains("Agus Vls Dal Sur Sin Gas &don 62s L|Generico|PedidosYa Market - San Miguel II|Supermercado|1|8158,40|"), response.csv());
+    }
+
+    private ReceiptParserService parserWithMemory(CorrectionMemory memory) {
+        return new ReceiptParserService(
+                new StoreNameMapper(new ObjectMapper(), new ClassPathResource("store-mappings.json")),
+                new BrandCatalog(new ObjectMapper()),
+                memory
+        );
+    }
+
+    @Test
+    void populatesSignatureFromSourceLine() {
+        ExtractResponse response = parserService.parse("""
+                SUPERMERCADO
+                LOS TRES CORAZONES
+                GAL OREO LECHE 1L 2000,00
+                TOTAL 2000,00
+                """);
+
+        assertEquals("gal oreo leche 1l", response.items().get(0).firma());
+    }
+
+    @Test
+    void appliesLearnedFieldsFromMemory() {
+        CorrectionMemory memory = new CorrectionMemory(new ObjectMapper(), tempDir.resolve("corrections.json"));
+        memory.upsert("Los Tres Corazones", "gal oreo leche 1l", "Galletitas Oreo", "Oreo", "Galletitas");
+        ReceiptParserService parser = parserWithMemory(memory);
+
+        ExtractResponse response = parser.parse("""
+                SUPERMERCADO
+                LOS TRES CORAZONES
+                GAL OREO LECHE 1L 2000,00
+                TOTAL 2000,00
+                """);
+
+        assertEquals(1, response.itemCount());
+        ReceiptItem item = response.items().get(0);
+        assertEquals("Galletitas Oreo", item.descripcion());
+        assertEquals("Oreo", item.marca());
+        assertEquals("Galletitas", item.categoria());
+        assertEquals("LEARNED", item.estado());
+    }
+
+    @Test
+    void recoversDiscardedLineFromMemory() {
+        CorrectionMemory memory = new CorrectionMemory(new ObjectMapper(), tempDir.resolve("corrections.json"));
+        memory.upsert("Los Tres Corazones", "gal oreo leche 1l descuento", "Galletitas Oreo", "Oreo", "Galletitas");
+        ReceiptParserService parser = parserWithMemory(memory);
+
+        ExtractResponse response = parser.parse("""
+                SUPERMERCADO
+                LOS TRES CORAZONES
+                GAL OREO LECHE 1L DESCUENTO 2400,00
+                """);
+
+        assertEquals(1, response.itemCount());
+        assertEquals("LEARNED", response.items().get(0).estado());
+        assertEquals("2400,00", response.items().get(0).precioUnitario());
+        assertTrue(response.warnings().stream().anyMatch(warning -> warning.contains("Recuperado de memoria")));
+    }
+
+    @Test
+    void memoryDoesNotCrossStores() {
+        CorrectionMemory memory = new CorrectionMemory(new ObjectMapper(), tempDir.resolve("corrections.json"));
+        memory.upsert("Otro Comercio", "gal oreo leche 1l", "X", "Y", "Z");
+        ReceiptParserService parser = parserWithMemory(memory);
+
+        ExtractResponse response = parser.parse("""
+                SUPERMERCADO
+                LOS TRES CORAZONES
+                GAL OREO LECHE 1L 2000,00
+                """);
+
+        assertEquals(1, response.itemCount());
+        assertEquals("CORRECT", response.items().get(0).estado());
     }
 }

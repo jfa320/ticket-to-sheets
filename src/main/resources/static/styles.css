@@ -281,6 +281,11 @@ th {
     background: rgba(245, 183, 77, 0.35);
 }
 
+.status-learned {
+    color: #1b4f8a;
+    background: rgba(27, 79, 138, 0.15);
+}
+
 .remove-row {
     margin: 0;
     padding: 8px 12px;

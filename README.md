@@ -12,6 +12,7 @@ App local para subir una foto o PDF de un ticket, correr OCR gratis con PaddleOC
   - formato tabulado para pegar directo en Google Sheets
 - muestra una tabla editable para corregir o eliminar filas antes de copiar
 - marca filas ambiguas y muestra advertencias completas cuando una línea no pudo confirmarse
+- aprende de tus correcciones (marca, categoría y descripción) y las aplica en el próximo ticket del mismo comercio
 - muestra tambien el texto OCR crudo para depurar
 
 ## Requisitos
@@ -66,6 +67,14 @@ mvn spring-boot:run
 5. Pega en Google Sheets.
 6. Si algun item sale raro, revisa el bloque `Texto OCR crudo`.
 
+## Aprendizaje de correcciones
+
+- Al editar la descripcion, la marca o la categoria de una fila, la correccion se guarda en `data/corrections.json` (envio automatico con breve demora despues de dejar de tipear).
+- La memoria se consulta por **comercio + linea del ticket**; un patron aprendido en un supermercado no se aplica en otro.
+- En el proximo ticket del mismo comercio, la fila equivalente se pre-completa con lo aprendido y se marca como `Memorizado`.
+- Las filas que hoy se descartan pero coinciden con algo aprendido se recuperan con una advertencia "Recuperado de memoria".
+- Solo se aprenden marca, categoria y descripcion. Precio y fecha siempre vienen del ticket actual.
+
 ## Limites actuales
 
 - la marca se estima a partir del inicio de la descripcion
@@ -76,6 +85,8 @@ mvn spring-boot:run
 - para fotos de tickets, el OCR ahora prueba varias versiones de la imagen y elige la mas util automaticamente
 - las filas nuevas no se cargan manualmente desde la UI; se corrigen o eliminan las filas detectadas
 - el precio total no forma parte de la salida del MVP
+- el aprendizaje guarda solo marca, categoria y descripcion; no almacena precios ni datos de tarjetas
+- `data/corrections.json` no se versiona en git; en Docker persiste por el volumen `./data:/app/data`
 
 ## Mejoras faciles para despues
 
