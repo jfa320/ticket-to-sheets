@@ -4,7 +4,6 @@ import com.opencode.facturas.model.ExtractResponse;
 import com.opencode.facturas.model.OcrResult;
 import com.opencode.facturas.service.OcrService;
 import com.opencode.facturas.service.ReceiptParserService;
-import jakarta.validation.constraints.NotNull;
 import org.springframework.http.MediaType;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -27,8 +26,8 @@ public class ReceiptController {
     }
 
     @PostMapping(value = "/extract", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ExtractResponse extract(@RequestParam("file") @NotNull MultipartFile file) {
-        if (file.isEmpty()) {
+    public ExtractResponse extract(@RequestParam(value = "file", required = false) MultipartFile file) {
+        if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("Subi una imagen o PDF de la factura.");
         }
 

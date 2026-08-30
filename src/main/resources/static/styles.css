@@ -162,6 +162,32 @@ button:disabled {
     margin-bottom: 6px;
 }
 
+.meta-edit {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 3px 0;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-weight: 800;
+    font-size: 1.05rem;
+}
+
+.meta-edit:focus {
+    outline: 2px solid rgba(31, 107, 83, 0.3);
+    border-color: rgba(31, 107, 83, 0.35);
+    padding: 3px 6px;
+}
+
+.meta-hint {
+    display: block;
+    margin-top: 5px;
+    color: var(--muted);
+    font-size: 0.72rem;
+}
+
 .actions {
     padding: 18px;
     display: flex;

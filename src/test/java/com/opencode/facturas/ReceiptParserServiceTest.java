@@ -58,6 +58,18 @@ class ReceiptParserServiceTest {
     }
 
     @Test
+    void ignoresInvalidOcrDateInsteadOfFailingTheReceipt() {
+        ExtractResponse response = parserService.parse("""
+                LOS TRES CORAZONES
+                Fecha 01/00/2026
+                PRODUCTO VALIDO 1200,00
+                """);
+
+        assertEquals("", response.date());
+        assertEquals(1, response.itemCount());
+    }
+
+    @Test
     void ignoresSubtotalVariantsAndUsesGenericBrandWhenUnknown() {
         ExtractResponse response = parserService.parse("""
                 LOS TRES CORAZONES
@@ -253,6 +265,64 @@ class ReceiptParserServiceTest {
         assertTrue(response.csv().contains("505gr|La Providencia|Los Tres Corazones"));
         assertTrue(response.csv().contains("Pure de tomates 520gr|Molto|Los Tres Corazones"));
         assertTrue(response.csv().contains("Salchichas 230gr|Unión Ganadera|Los Tres Corazones"));
+    }
+
+    @Test
+    void parseHardwareInvoiceWithQuantityPriceOnNextLine() {
+        ExtractResponse response = parserService.parse("""
+                Ferreteria Tribulato
+                Fecha V. 29/06/26
+                SOPORTE P/ ESTANTE BRACKET 250 X 350 - 20 UNID.
+                1 X $ 3.471,07
+                IVA 21,00%: $ 728,93
+                SOPORTE P/ ESTANTE BRACKET 200 X 250 - 20 UNID.
+                2 X $ 2.561,98
+                IVA 21,00%: $ 1.076,03
+                TRABUCO EX TIPO ESPECIAL N°8 X500 U
+                6 X $ 41,32
+                IVA 21,00%: $ 52,07
+                PUNTA AGUJA MADERA 6X1
+                6 X $ 16,53
+                IVA 21,00%: $ 20,83
+                TORNILLO CABEZA TANQUE 3/16X1/2
+                2 X $ 74,38
+                IVA 21,00%: $ 31,24
+                ARANDELA PLANA ZINC 3/16
+                2 X $ 16,53
+                IVA 21,00%: $ 6,94
+                TUERCA HEXAGONAL ZINCADA 3/16
+                2 X $ 33,06
+                IVA 21,00%: $ 13,88
+                Subtotal neto $ 9.438,02
+                TOTAL $ 11.420,00
+                """);
+
+        assertEquals("Ferreteria Tribulato", response.storeName());
+        assertEquals("29/6/2026", response.date());
+        assertEquals("Ferreteria", response.items().get(0).categoria());
+        assertEquals(7, response.itemCount());
+        assertEquals("11119,99", response.total());
+        assertTrue(response.csv().contains("Soporte P/ Estante Bracket 250 X 350 - 20 Unid|Genérico|Ferreteria Tribulato|Ferreteria|1|3471,07|29/6/2026"), response.csv());
+        assertTrue(response.csv().contains("Soporte P/ Estante Bracket 200 X 250 - 20 Unid|Genérico|Ferreteria Tribulato|Ferreteria|2|2561,98|29/6/2026"), response.csv());
+    }
+
+    @Test
+    void parseInlineHardwarePricesAndIgnoreTaxAndNetTotals() {
+        ExtractResponse response = parserService.parse("""
+                Ferreteria Tribulato
+                Fecha 29/06/26
+                PUNTA AGUJA MADERA 6X1
+                6 x$16,53 (21,00% $ 99,17)
+                TUERCA HEXAGONAL ZINCADA 3/16
+                2$33,06 (21,00% $56,12)
+                Neto Gravado $ 9.438,02
+                TOTAL $ 11.420,00
+                """);
+
+        assertEquals(2, response.itemCount());
+        assertEquals("16,53", response.items().get(0).precioUnitario());
+        assertEquals("33,06", response.items().get(1).precioUnitario());
+        assertTrue(response.csv().contains("Aguja Madera 6x1|Punta del agua|Ferreteria Tribulato"), response.csv());
     }
 
     @Test

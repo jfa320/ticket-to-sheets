@@ -23,6 +23,9 @@ let learnTimer = null;
 let copyToastTimer = null;
 updateSubmitButton();
 
+storeName.addEventListener('input', () => updateCommonField('lugarDeCompra', storeName.value));
+dateValue.addEventListener('input', () => updateCommonField('fecha', dateValue.value));
+
 document.getElementById('copyPipe').addEventListener('click', () => copyText(csvOutput.value, 'Texto copiado.'));
 document.getElementById('copyTsv').addEventListener('click', () => copyText(window.lastRowsOnly || '', 'Listo para pegar en Google Sheets.'));
 document.getElementById('copyRowsOnly').addEventListener('click', () => copyText(window.lastRowsOnly || '', 'Filas copiadas.'));
@@ -33,8 +36,9 @@ fileInput.addEventListener('input', updateSelectedFileState);
 form.addEventListener('submit', async (event) => {
     event.preventDefault();
 
-    const file = fileInput.files[0];
+    const file = getSelectedFile();
     if (!file) {
+        submitButton.disabled = true;
         statusLabel.textContent = 'Elegí una factura antes de procesar.';
         return;
     }
@@ -56,8 +60,8 @@ form.addEventListener('submit', async (event) => {
         }
 
         const payload = await response.json();
-        storeName.textContent = payload.storeName || '-';
-        dateValue.textContent = payload.date || '-';
+        storeName.value = payload.storeName || '';
+        dateValue.value = payload.date || '';
         itemCount.textContent = payload.itemCount ?? 0;
         totalValue.textContent = formatTotal(payload.total);
         csvOutput.value = payload.csv || '';
@@ -90,17 +94,21 @@ function setLoading(isLoading, message) {
 }
 
 function updateSelectedFileState() {
-    const file = fileInput.files?.[0];
+    const file = getSelectedFile();
     updateSubmitButton();
     statusLabel.textContent = file ? `Archivo listo: ${file.name}` : 'Esperando archivo...';
 }
 
 function updateSubmitButton() {
-    submitButton.disabled = !hasSelectedFile();
+    submitButton.disabled = !getSelectedFile();
 }
 
 function hasSelectedFile() {
-    return Boolean(fileInput.files?.length || fileInput.value);
+    return Boolean(getSelectedFile());
+}
+
+function getSelectedFile() {
+    return fileInput.files?.[0] || null;
 }
 
 async function copyText(value, successMessage) {
@@ -172,6 +180,8 @@ function renderItems() {
         ['descripcion', 'marca', 'lugarDeCompra', 'categoria', 'cantidad', 'precioUnitario', 'fecha'].forEach(field => {
             const cell = document.createElement('td');
             cell.textContent = item[field] || '';
+            cell.dataset.field = field;
+            cell.dataset.index = String(index);
             if (editableFields.includes(field)) {
                 cell.contentEditable = 'true';
                 cell.classList.add('editable-cell');
@@ -216,6 +226,22 @@ function renderItems() {
         itemsBody.append(row);
     });
     refreshExports();
+}
+
+function updateCommonField(field, value) {
+    editableItems.forEach(item => {
+        item[field] = value.trim();
+    });
+    if (field === 'lugarDeCompra') {
+        storeNameForLearn = value.trim();
+    }
+    document.querySelectorAll(`[data-field="${field}"]`).forEach(cell => {
+        cell.textContent = value.trim();
+    });
+    refreshExports();
+    if (field === 'lugarDeCompra') {
+        scheduleLearn();
+    }
 }
 
 function refreshExports() {

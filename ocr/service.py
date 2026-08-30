@@ -86,6 +86,7 @@ def get_ocr(language):
                     show_log=False,
                     enable_mkldnn=False,
                     use_mkldnn=False,
+                    ir_optim=False,
                     cpu_threads=1,
                 )
             except Exception:
@@ -96,6 +97,7 @@ def get_ocr(language):
                     show_log=False,
                     enable_mkldnn=False,
                     use_mkldnn=False,
+                    ir_optim=False,
                     cpu_threads=1,
                 )
             app.logger.info("PaddleOCR model for language '%s' loaded", language)
