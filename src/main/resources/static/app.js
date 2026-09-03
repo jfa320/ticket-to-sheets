@@ -16,6 +16,7 @@ const emptyItems = document.getElementById('emptyItems');
 const warningsPanel = document.getElementById('warningsPanel');
 const warningsList = document.getElementById('warningsList');
 const copyToast = document.getElementById('copyToast');
+const dropzone = document.querySelector('.dropzone');
 let editableItems = [];
 let storeNameForLearn = '';
 let originalsByFirma = new Map();
@@ -24,7 +25,7 @@ let copyToastTimer = null;
 updateSubmitButton();
 
 storeName.addEventListener('input', () => updateCommonField('lugarDeCompra', storeName.value));
-dateValue.addEventListener('input', () => updateCommonField('fecha', dateValue.value));
+dateValue.addEventListener('change', () => updateCommonField('fecha', formatDateForItems(dateValue.value)));
 
 document.getElementById('copyPipe').addEventListener('click', () => copyText(csvOutput.value, 'Texto copiado.'));
 document.getElementById('copyTsv').addEventListener('click', () => copyText(window.lastRowsOnly || '', 'Listo para pegar en Google Sheets.'));
@@ -32,6 +33,38 @@ document.getElementById('copyRowsOnly').addEventListener('click', () => copyText
 
 fileInput.addEventListener('change', updateSelectedFileState);
 fileInput.addEventListener('input', updateSelectedFileState);
+
+['dragenter', 'dragover'].forEach(eventName => {
+    dropzone.addEventListener(eventName, event => {
+        event.preventDefault();
+        dropzone.classList.add('drag-over');
+    });
+});
+
+['dragleave', 'drop'].forEach(eventName => {
+    dropzone.addEventListener(eventName, event => {
+        event.preventDefault();
+        dropzone.classList.remove('drag-over');
+    });
+});
+
+dropzone.addEventListener('drop', event => {
+    const file = event.dataTransfer.files?.[0];
+    if (!file) {
+        return;
+    }
+
+    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+    if (!file.type.startsWith('image/') && !isPdf) {
+        statusLabel.textContent = 'Elegí una imagen o un PDF.';
+        return;
+    }
+
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    fileInput.files = transfer.files;
+    updateSelectedFileState();
+});
 
 form.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -61,7 +94,7 @@ form.addEventListener('submit', async (event) => {
 
         const payload = await response.json();
         storeName.value = payload.storeName || '';
-        dateValue.value = payload.date || '';
+        dateValue.value = toDateInputValue(payload.date);
         itemCount.textContent = payload.itemCount ?? 0;
         totalValue.textContent = formatTotal(payload.total);
         csvOutput.value = payload.csv || '';
@@ -109,6 +142,26 @@ function hasSelectedFile() {
 
 function getSelectedFile() {
     return fileInput.files?.[0] || null;
+}
+
+function toDateInputValue(value) {
+    const parts = (value || '').split('/');
+    if (parts.length !== 3) {
+        return '';
+    }
+    const [day, month, year] = parts;
+    if (!day || !month || !year) {
+        return '';
+    }
+    return `${year.padStart(4, '0')}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+}
+
+function formatDateForItems(value) {
+    if (!value) {
+        return '';
+    }
+    const [year, month, day] = value.split('-');
+    return `${Number(day)}/${Number(month)}/${year}`;
 }
 
 async function copyText(value, successMessage) {

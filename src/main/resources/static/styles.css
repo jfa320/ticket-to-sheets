@@ -85,6 +85,12 @@ h1 {
     cursor: pointer;
 }
 
+.dropzone.drag-over {
+    border-color: var(--accent);
+    background: rgba(218, 239, 226, 0.95);
+    transform: translateY(-1px);
+}
+
 .dropzone input {
     display: none;
 }
