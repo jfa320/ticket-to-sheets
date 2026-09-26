@@ -1,425 +1,306 @@
-const form = document.getElementById('uploadForm');
-const fileInput = document.getElementById('fileInput');
-const statusLabel = document.getElementById('status');
-const results = document.getElementById('results');
-const storeName = document.getElementById('storeName');
-const dateValue = document.getElementById('dateValue');
-const itemCount = document.getElementById('itemCount');
-const totalValue = document.getElementById('totalValue');
-const csvOutput = document.getElementById('csvOutput');
-const tsvOutput = document.getElementById('tsvOutput');
-const rawOutput = document.getElementById('rawOutput');
-const submitButton = document.getElementById('submitButton');
-const itemsBody = document.getElementById('itemsBody');
-const itemsEditor = document.getElementById('itemsEditor');
-const emptyItems = document.getElementById('emptyItems');
-const warningsPanel = document.getElementById('warningsPanel');
-const warningsList = document.getElementById('warningsList');
-const copyToast = document.getElementById('copyToast');
+import {
+    createReceipt, buildExports, formatTotal, validationErrors, toDateInputValue, formatDateForItems
+} from './receipt-model.mjs';
+import {extractReceipt, saveCorrections, validateFile} from './receipt-api.mjs';
+import {createCorrectionSaver} from './receipt-corrections.mjs';
+import {renderItems, renderWarnings, markInvalidCells} from './receipt-view.mjs';
+
+const byId = id => document.getElementById(id);
+const form = byId('uploadForm');
+const fileInput = byId('fileInput');
+const status = byId('status');
+const results = byId('results');
+const submitButton = byId('submitButton');
 const dropzone = document.querySelector('.dropzone');
-let editableItems = [];
-let storeNameForLearn = '';
-let originalsByFirma = new Map();
-let learnTimer = null;
+const fileSummary = byId('fileSummary');
+const fileName = byId('fileName');
+const viewFile = byId('viewFile');
+const replaceFile = byId('replaceFile');
+const filePreviewDialog = byId('filePreviewDialog');
+const filePreviewContent = byId('filePreviewContent');
+const closeFilePreview = byId('closeFilePreview');
+const storeName = byId('storeName');
+const dateValue = byId('dateValue');
+const itemsBody = byId('itemsBody');
+const addItemButton = byId('addItem');
+const retryCorrections = byId('retryCorrections');
+const copyToast = byId('copyToast');
+const undoToast = byId('undoToast');
+const undoRemove = byId('undoRemove');
+const copyButtons = [byId('copyPipe'), byId('copyTsv'), byId('copyRowsOnly')];
+let receipt = null;
+let correctionSaver = null;
+let output = buildExports([]);
+let selectedFile = null;
+let loading = false;
 let copyToastTimer = null;
-updateSubmitButton();
+let undoTimer = null;
+let removedItem = null;
+let previewUrl = null;
 
-storeName.addEventListener('input', () => updateCommonField('lugarDeCompra', storeName.value));
-dateValue.addEventListener('change', () => updateCommonField('fecha', formatDateForItems(dateValue.value)));
+function updateUploadControls() {
+    submitButton.disabled = loading || Boolean(validateFile(selectedFile));
+    viewFile.disabled = loading || !selectedFile;
+    submitButton.textContent = loading ? 'Procesando…' : 'Extraer datos';
+    fileInput.disabled = loading;
+    form.setAttribute('aria-busy', String(loading));
+    dropzone.setAttribute('aria-disabled', String(loading));
+    results.inert = loading;
+}
 
-document.getElementById('copyPipe').addEventListener('click', () => copyText(csvOutput.value, 'Texto copiado.'));
-document.getElementById('copyTsv').addEventListener('click', () => copyText(window.lastRowsOnly || '', 'Listo para pegar en Google Sheets.'));
-document.getElementById('copyRowsOnly').addEventListener('click', () => copyText(window.lastRowsOnly || '', 'Filas copiadas.'));
+function selectFile(file) {
+    if (loading) return;
+    const error = validateFile(file);
+    selectedFile = error ? null : file;
+    status.textContent = error || `Archivo listo: ${file.name}`;
+    fileSummary.classList.toggle('hidden', Boolean(error));
+    fileName.textContent = error ? '' : file.name;
+    prepareFilePreview(selectedFile);
+    updateUploadControls();
+}
 
-fileInput.addEventListener('change', updateSelectedFileState);
-fileInput.addEventListener('input', updateSelectedFileState);
+function prepareFilePreview(file) {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    previewUrl = null;
+    filePreviewContent.replaceChildren();
+    if (!file) return;
+    previewUrl = URL.createObjectURL(file);
+    const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+    if (isPdf) {
+        const frame = document.createElement('iframe');
+        frame.src = previewUrl;
+        frame.title = `Vista previa de ${file.name}`;
+        filePreviewContent.append(frame);
+        return;
+    }
+    const image = document.createElement('img');
+    image.src = previewUrl;
+    image.alt = `Vista previa de ${file.name}`;
+    filePreviewContent.append(image);
+}
 
-['dragenter', 'dragover'].forEach(eventName => {
+viewFile.addEventListener('click', () => {
+    if (!selectedFile) return;
+    if (typeof filePreviewDialog.showModal === 'function') filePreviewDialog.showModal();
+    else filePreviewDialog.setAttribute('open', '');
+});
+closeFilePreview.addEventListener('click', () => filePreviewDialog.close());
+filePreviewDialog.addEventListener('click', event => {
+    if (event.target === filePreviewDialog) filePreviewDialog.close();
+});
+
+replaceFile.addEventListener('click', () => {
+    if (!loading) fileInput.click();
+});
+
+fileInput.addEventListener('change', () => selectFile(fileInput.files?.[0]));
+['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
     dropzone.addEventListener(eventName, event => {
         event.preventDefault();
-        dropzone.classList.add('drag-over');
+        dropzone.classList.toggle('drag-over', !loading && ['dragenter', 'dragover'].includes(eventName));
+        if (eventName === 'drop' && !loading) {
+            // Mantener el File en estado evita depender de asignar FileList/DataTransfer.
+            fileInput.value = '';
+            selectFile(event.dataTransfer.files?.[0]);
+        }
     });
 });
 
-['dragleave', 'drop'].forEach(eventName => {
-    dropzone.addEventListener(eventName, event => {
-        event.preventDefault();
-        dropzone.classList.remove('drag-over');
-    });
-});
-
-dropzone.addEventListener('drop', event => {
-    const file = event.dataTransfer.files?.[0];
-    if (!file) {
-        return;
-    }
-
-    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
-    if (!file.type.startsWith('image/') && !isPdf) {
-        statusLabel.textContent = 'Elegí una imagen o un PDF.';
-        return;
-    }
-
-    const transfer = new DataTransfer();
-    transfer.items.add(file);
-    fileInput.files = transfer.files;
-    updateSelectedFileState();
-});
-
-form.addEventListener('submit', async (event) => {
+form.addEventListener('submit', async event => {
     event.preventDefault();
-
-    const file = getSelectedFile();
-    if (!file) {
-        submitButton.disabled = true;
-        statusLabel.textContent = 'Elegí una factura antes de procesar.';
-        return;
-    }
-
-    const data = new FormData();
-    data.append('file', file);
-
-    setLoading(true, 'Procesando la factura, esto puede tardar unos segundos...');
-
+    if (loading) return;
+    const error = validateFile(selectedFile);
+    if (error) { status.textContent = error; return; }
+    const file = selectedFile;
+    loading = true;
+    updateUploadControls();
+    status.textContent = 'Procesando la factura. Esto puede tardar unos segundos…';
     try {
-        const response = await fetch('/api/receipts/extract', {
-            method: 'POST',
-            body: data
-        });
-
-        if (!response.ok) {
-            const errorPayload = await response.json().catch(() => null);
-            throw new Error(errorPayload?.message || 'No se pudo procesar la factura.');
+        // Resolver ediciones pendientes antes de sustituir el ticket que las originó.
+        if (correctionSaver && !await correctionSaver.flush()) {
+            status.textContent = 'Reintentá el guardado de las correcciones antes de cargar otra factura.';
+            return;
         }
-
-        const payload = await response.json();
-        storeName.value = payload.storeName || '';
-        dateValue.value = toDateInputValue(payload.date);
-        itemCount.textContent = payload.itemCount ?? 0;
-        totalValue.textContent = formatTotal(payload.total);
-        csvOutput.value = payload.csv || '';
-        tsvOutput.value = payload.tsv || '';
-        window.lastRowsOnly = payload.tsvWithoutHeader || '';
-        rawOutput.value = payload.rawText || '';
-        editableItems = (payload.items || []).map(item => ({...item}));
-        originalsByFirma = new Map((payload.items || []).map(item => [item.firma, item]));
-        storeNameForLearn = payload.storeName || '';
-        clearTimeout(learnTimer);
-        renderWarnings(payload.warnings || []);
-        renderItems();
+        clearReceiptState();
+        const nextReceipt = createReceipt(await extractReceipt(file));
+        receipt = nextReceipt;
+        correctionSaver = createCorrectionSaver(receipt, {
+            save: saveCorrections,
+            onStatus(state, message) {
+                byId('learnStatus').textContent = message;
+                retryCorrections.classList.toggle('hidden', state !== 'error');
+            }
+        });
+        byId('learnStatus').textContent = '';
+        retryCorrections.classList.add('hidden');
+        storeName.value = receipt.storeName;
+        dateValue.value = toDateInputValue(receipt.date);
+        byId('rawOutput').value = receipt.rawText;
+        renderTable();
         results.classList.remove('hidden');
-        statusLabel.textContent = payload.warnings?.length
-            ? `Listo. Hay ${payload.warnings.length} advertencia(s) para revisar.`
-            : 'Listo. Edita las filas si hace falta y copia la salida.';
+        setActiveStep(1);
+        if (receipt.warnings.length) {
+            requestAnimationFrame(() => byId('warningsTitle').focus());
+        }
+        status.textContent = receipt.warnings.length
+            ? `Listo. Hay ${receipt.warnings.length} advertencia(s) para revisar.`
+            : 'Listo. Revisá las filas y copiá la salida.';
     } catch (error) {
-        statusLabel.textContent = `Error: ${cleanError(error.message)}`;
+        console.error('[facturas] Error al procesar la factura', error);
+        status.textContent = `Error: ${error.message}${receipt ? ' Se conserva el ticket anterior.' : ''}`;
     } finally {
-        setLoading(false);
+        loading = false;
+        updateUploadControls();
     }
 });
 
-function setLoading(isLoading, message) {
-    submitButton.disabled = isLoading || !hasSelectedFile();
-    submitButton.textContent = isLoading ? 'Procesando...' : 'Extraer datos';
-    if (message) {
-        statusLabel.textContent = message;
-    }
-}
-
-function updateSelectedFileState() {
-    const file = getSelectedFile();
-    updateSubmitButton();
-    statusLabel.textContent = file ? `Archivo listo: ${file.name}` : 'Esperando archivo...';
-}
-
-function updateSubmitButton() {
-    submitButton.disabled = !getSelectedFile();
-}
-
-function hasSelectedFile() {
-    return Boolean(getSelectedFile());
-}
-
-function getSelectedFile() {
-    return fileInput.files?.[0] || null;
-}
-
-function toDateInputValue(value) {
-    const parts = (value || '').split('/');
-    if (parts.length !== 3) {
-        return '';
-    }
-    const [day, month, year] = parts;
-    if (!day || !month || !year) {
-        return '';
-    }
-    return `${year.padStart(4, '0')}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
-}
-
-function formatDateForItems(value) {
-    if (!value) {
-        return '';
-    }
-    const [year, month, day] = value.split('-');
-    return `${Number(day)}/${Number(month)}/${year}`;
-}
-
-async function copyText(value, successMessage) {
-    if (!value) {
-        statusLabel.textContent = 'Todavia no hay salida para copiar.';
-        showCopyToast('Todavía no hay texto para copiar.', true);
-        return;
-    }
-
-    try {
-        await navigator.clipboard.writeText(value);
-        statusLabel.textContent = successMessage;
-        showCopyToast(successMessage);
-    } catch (error) {
-        statusLabel.textContent = 'No se pudo copiar el texto.';
-        showCopyToast('No se pudo copiar el texto.', true);
-    }
-}
-
-function showCopyToast(message, isError = false) {
-    clearTimeout(copyToastTimer);
-    copyToast.textContent = message;
-    copyToast.classList.toggle('copy-toast-error', isError);
-    copyToast.classList.add('copy-toast-visible');
-    copyToastTimer = setTimeout(() => {
-        copyToast.classList.remove('copy-toast-visible');
-    }, 2200);
-}
-
-function cleanError(message) {
-    return (message || 'No se pudo procesar la factura.').trim();
-}
-
-function renderWarnings(warnings) {
-    warningsList.replaceChildren();
-    warningsPanel.classList.toggle('hidden', warnings.length === 0);
-    warnings.forEach(warning => {
-        const item = document.createElement('li');
-        item.textContent = warning;
-        warningsList.append(item);
-    });
-}
-
-const editableFields = ['descripcion', 'marca', 'lugarDeCompra', 'cantidad', 'precioUnitario', 'fecha'];
-
-function renderItems() {
+function clearReceiptState() {
+    correctionSaver?.dispose();
+    correctionSaver = null;
+    receipt = null;
+    output = buildExports([]);
+    removedItem = null;
+    clearTimeout(undoTimer);
+    undoToast.classList.add('hidden');
+    storeName.value = '';
+    dateValue.value = '';
+    byId('itemCount').textContent = '0';
+    byId('totalValue').textContent = formatTotal(0);
+    byId('rawOutput').value = '';
+    byId('csvOutput').value = '';
+    byId('tsvOutput').value = '';
     itemsBody.replaceChildren();
-    const hasItems = editableItems.length > 0;
-    emptyItems.classList.toggle('hidden', hasItems);
-    itemsEditor.classList.toggle('empty-editor', !hasItems);
+    byId('warningsList').replaceChildren();
+    byId('warningsPanel').classList.add('hidden');
+    byId('emptyItems').classList.add('hidden');
+    document.querySelector('.table-scroll').classList.add('hidden');
+    results.classList.add('hidden');
+}
+
+function refresh() {
+    if (!receipt) return;
+    output = buildExports(receipt.items);
+    byId('itemCount').textContent = output.count;
+    byId('totalValue').textContent = formatTotal(output.total);
+    byId('csvOutput').value = output.pipe;
+    byId('tsvOutput').value = output.tsv;
+    const errors = validationErrors(receipt.items);
+    copyButtons.forEach(button => { button.disabled = output.count === 0 || errors.length > 0; });
+    renderWarnings([...receipt.warnings, ...errors.map(error => error.message)], byId('warningsPanel'), byId('warningsList'));
+    markInvalidCells(errors, itemsBody);
+    byId('exportHint').setAttribute('role', errors.length ? 'alert' : 'status');
+    byId('exportHint').textContent = errors.length
+        ? 'Corregí los campos marcados o desmarcá esas filas antes de copiar.'
+        : output.count ? 'Se copian únicamente las filas marcadas para usar.' : 'Seleccioná al menos una fila para copiar.';
+}
+
+function renderTable() {
+    const hasItems = receipt.items.length > 0;
+    byId('emptyItems').classList.toggle('hidden', hasItems);
     document.querySelector('.table-scroll').classList.toggle('hidden', !hasItems);
-    editableItems.forEach((item, index) => {
-        const row = document.createElement('tr');
-        if (item.estado === 'AMBIGUOUS') {
-            row.classList.add('ambiguous-row');
+    renderItems(receipt.items, itemsBody, {
+        onEdit(item, field, value) {
+            item[field] = value;
+            refresh();
+            if (['descripcion', 'marca', 'categoria', 'lugarDeCompra'].includes(field)) correctionSaver.schedule();
+        },
+        onSelect(item, selected) {
+            item.usar = selected;
+            refresh();
+            correctionSaver.schedule();
+        },
+        onRemove(item) {
+            const index = receipt.items.indexOf(item);
+            removedItem = {item, index};
+            receipt.items.splice(index, 1);
+            renderTable();
+            correctionSaver.schedule();
+            showUndoToast();
         }
-
-        const useCell = document.createElement('td');
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.checked = item.usar !== false;
-        checkbox.addEventListener('change', () => {
-            item.usar = checkbox.checked;
-            refreshExports();
-        });
-        useCell.append(checkbox);
-        row.append(useCell);
-
-        ['descripcion', 'marca', 'lugarDeCompra', 'categoria', 'cantidad', 'precioUnitario', 'fecha'].forEach(field => {
-            const cell = document.createElement('td');
-            cell.textContent = item[field] || '';
-            cell.dataset.field = field;
-            cell.dataset.index = String(index);
-            if (editableFields.includes(field)) {
-                cell.contentEditable = 'true';
-                cell.classList.add('editable-cell');
-                cell.addEventListener('input', () => {
-                    item[field] = cell.textContent.trim();
-                    refreshExports();
-                    scheduleLearn();
-                });
-            } else {
-                cell.classList.add('readonly-cell');
-            }
-            row.append(cell);
-        });
-
-        const stateCell = document.createElement('td');
-        const badge = document.createElement('span');
-        let badgeClass = 'status-correct';
-        let badgeText = 'Correcto';
-        if (item.estado === 'AMBIGUOUS') {
-            badgeClass = 'status-ambiguous';
-            badgeText = 'Ambiguo';
-        } else if (item.estado === 'LEARNED') {
-            badgeClass = 'status-learned';
-            badgeText = 'Memorizado';
-        }
-        badge.className = `status-badge ${badgeClass}`;
-        badge.textContent = badgeText;
-        stateCell.append(badge);
-        row.append(stateCell);
-
-        const actionCell = document.createElement('td');
-        const removeButton = document.createElement('button');
-        removeButton.type = 'button';
-        removeButton.className = 'remove-row';
-        removeButton.textContent = 'Eliminar';
-        removeButton.addEventListener('click', () => {
-            editableItems.splice(index, 1);
-            renderItems();
-        });
-        actionCell.append(removeButton);
-        row.append(actionCell);
-        itemsBody.append(row);
     });
-    refreshExports();
+    refresh();
+}
+
+function addManualItem() {
+    if (!receipt || loading) return;
+    const baseItem = receipt.items.find(item => String(item.categoria ?? '').trim()) || {};
+    const newItem = {
+        descripcion: '',
+        marca: '',
+        lugarDeCompra: receipt.storeName || baseItem.lugarDeCompra || '',
+        categoria: baseItem.categoria || '',
+        cantidad: '',
+        precioUnitario: '',
+        fecha: receipt.date || baseItem.fecha || '',
+        estado: 'CORRECT',
+        firma: '',
+        usar: true
+    };
+    receipt.items.push(newItem);
+    renderTable();
+    const descriptionCell = itemsBody.lastElementChild?.querySelector('[data-field="descripcion"]');
+    descriptionCell?.focus();
 }
 
 function updateCommonField(field, value) {
-    editableItems.forEach(item => {
-        item[field] = value.trim();
-    });
-    if (field === 'lugarDeCompra') {
-        storeNameForLearn = value.trim();
+    if (!receipt || loading) return;
+    const cleaned = value.trim();
+    receipt.items.forEach(item => { item[field] = cleaned; });
+    itemsBody.querySelectorAll(`[data-field="${field}"]`).forEach(cell => { cell.textContent = cleaned; });
+    refresh();
+    if (field === 'lugarDeCompra') correctionSaver.schedule();
+}
+
+storeName.addEventListener('input', () => updateCommonField('lugarDeCompra', storeName.value));
+dateValue.addEventListener('change', () => updateCommonField('fecha', formatDateForItems(dateValue.value)));
+retryCorrections.addEventListener('click', () => { void correctionSaver?.flush(); });
+addItemButton.addEventListener('click', addManualItem);
+
+byId('copyPipe').addEventListener('click', () => copyText(output.pipe, 'Texto copiado.'));
+byId('copyTsv').addEventListener('click', () => copyText(output.tsv, 'Tabla con encabezado copiada para Google Sheets.'));
+byId('copyRowsOnly').addEventListener('click', () => copyText(output.rowsOnly, 'Filas sin encabezado copiadas.'));
+undoRemove.addEventListener('click', () => {
+    if (!receipt || !removedItem) return;
+    receipt.items.splice(removedItem.index, 0, removedItem.item);
+    removedItem = null;
+    clearTimeout(undoTimer);
+    undoToast.classList.add('hidden');
+    renderTable();
+    correctionSaver.schedule();
+});
+
+async function copyText(value, message) {
+    if (!receipt || output.count === 0 || validationErrors(receipt.items).length > 0) return;
+    try {
+        await navigator.clipboard.writeText(value);
+        setActiveStep(2);
+        showCopyToast(message);
+    } catch {
+        showCopyToast('No se pudo copiar. Podés seleccionar y copiar el texto de salida.', true);
     }
-    document.querySelectorAll(`[data-field="${field}"]`).forEach(cell => {
-        cell.textContent = value.trim();
-    });
-    refreshExports();
-    if (field === 'lugarDeCompra') {
-        scheduleLearn();
-    }
 }
 
-function refreshExports() {
-    const selectedItems = editableItems.filter(item => item.usar !== false);
-    itemCount.textContent = selectedItems.length;
-    totalValue.textContent = formatTotal(calculateTotal(selectedItems));
-    const headers = ['Descripción', 'Marca', 'Lugar de compra', 'Categoria', 'Cantidad', 'Precio unitario', 'Fecha'];
-    const values = selectedItems.map(item => [
-        item.descripcion, item.marca, item.lugarDeCompra, item.categoria,
-        item.cantidad, item.precioUnitario, item.fecha
-    ]);
-    const rows = [headers, ...values];
-    csvOutput.value = rows.map(row => row.map(value => escapeDelimited(value, '|')).join('|')).join('\n');
-    tsvOutput.value = rows.map(row => row.map(value => escapeDelimited(value, '\t')).join('\t')).join('\n');
-    window.lastRowsOnly = values.map(row => row.map(value => escapeDelimited(value, '\t')).join('\t')).join('\n');
+function showCopyToast(message, error = false) {
+    clearTimeout(copyToastTimer);
+    copyToast.textContent = message;
+    copyToast.classList.toggle('copy-toast-error', error);
+    copyToast.classList.add('copy-toast-visible');
+    copyToastTimer = setTimeout(() => copyToast.classList.remove('copy-toast-visible'), 3000);
 }
 
-function calculateTotal(items) {
-    return items.reduce((sum, item) => {
-        const unitPrice = parseLocalizedNumber(item.precioUnitario);
-        const quantity = parseLocalizedNumber(item.cantidad) || 1;
-        return sum + unitPrice * quantity;
-    }, 0);
+function showUndoToast() {
+    clearTimeout(undoTimer);
+    undoToast.classList.remove('hidden');
+    undoTimer = setTimeout(() => {
+        undoToast.classList.add('hidden');
+        removedItem = null;
+    }, 5000);
 }
 
-function parseLocalizedNumber(value) {
-    const text = String(value ?? '')
-        .trim()
-        .replace(/\s/g, '')
-        .replace(/\$/g, '');
-    if (!text) {
-        return 0;
-    }
-    const normalized = text.includes(',')
-        ? text.replaceAll('.', '').replace(',', '.')
-        : text;
-    const number = Number(normalized);
-    return Number.isFinite(number) ? number : 0;
-}
-
-function formatTotal(value) {
-    const number = typeof value === 'number' ? value : parseLocalizedNumber(value);
-    return `$ ${number.toLocaleString('es-AR', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-}
-
-function escapeDelimited(value, delimiter) {
-    const safe = value == null ? '' : String(value);
-    return safe.includes(delimiter) || safe.includes('\n') || safe.includes('"')
-        ? `"${safe.replaceAll('"', '""')}"`
-        : safe;
-}
-
-function scheduleLearn() {
-    if (!storeNameForLearn) {
-        return;
-    }
-    clearTimeout(learnTimer);
-    learnTimer = setTimeout(sendCorrections, 2000);
-}
-
-function sendCorrections() {
-    if (!storeNameForLearn) {
-        return;
-    }
-    const corrections = [];
-    editableItems.forEach(item => {
-        if (!item.firma) {
-            return;
-        }
-        const original = originalsByFirma.get(item.firma);
-        if (!original) {
-            return;
-        }
-        if (isGenericBrand(original.marca) || isGenericBrand(item.marca)) {
-            return;
-        }
-        const diffs = {};
-        ['descripcion', 'marca', 'categoria'].forEach(field => {
-            if ((item[field] || '') !== (original[field] || '')) {
-                diffs[field] = item[field] || '';
-            }
-        });
-        if (Object.keys(diffs).length === 0) {
-            return;
-        }
-        diffs.firma = item.firma;
-        diffs.marcaOriginal = original.marca || '';
-        corrections.push(diffs);
-    });
-
-    if (corrections.length === 0) {
-        return;
-    }
-
-    fetch('/api/corrections', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ store: storeNameForLearn, corrections })
-    }).then(response => {
-        if (!response.ok) {
-            throw new Error('No se pudieron aprender las correcciones.');
-        }
-        return response.json();
-    }).then(() => {
-        corrections.forEach(correction => {
-            const original = originalsByFirma.get(correction.firma);
-            if (!original) {
-                return;
-            }
-            ['descripcion', 'marca', 'categoria'].forEach(field => {
-                if (correction[field] !== undefined) {
-                    original[field] = correction[field];
-                }
-            });
-        });
-        statusLabel.textContent = 'Correcciones aprendidas para próximos tickets.';
-    }).catch(error => {
-        statusLabel.textContent = `Aviso: ${cleanError(error.message)}`;
+function setActiveStep(index) {
+    document.querySelectorAll('.flow-step').forEach((step, stepIndex) => {
+        step.classList.toggle('flow-step-active', stepIndex === index);
     });
 }
 
-function isGenericBrand(value) {
-    return String(value || '')
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .trim()
-        .toLowerCase() === 'generico';
-}
+updateUploadControls();

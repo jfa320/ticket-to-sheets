@@ -7,51 +7,70 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="/styles.css?v=8">
 </head>
 <body>
 <main class="shell">
     <section class="hero">
         <p class="eyebrow">Carga simple de facturas</p>
-        <h1>Subi una factura y llevatela lista para pegar en Google Sheets.</h1>
+        <h1>Subí una factura y llevátela lista para pegar en Google Sheets.</h1>
         <p class="lead">Subí una imagen o PDF, revisá los datos y copialos donde los necesites.</p>
+        <ol class="flow-steps" aria-label="Flujo de trabajo">
+            <li class="flow-step flow-step-active">Cargar</li>
+            <li class="flow-step">Revisar</li>
+            <li class="flow-step">Copiar</li>
+        </ol>
     </section>
 
     <section class="panel uploader">
-        <form id="uploadForm">
+        <form id="uploadForm" novalidate>
             <label class="dropzone" for="fileInput">
-                <input id="fileInput" name="file" type="file" accept="image/*,.pdf" required>
-                <span class="dropzone-title">Arrastra la factura o hace click para elegirla</span>
-                <span class="dropzone-hint">Soporta JPG, PNG y PDF. Idealmente una foto centrada y con buena luz.</span>
+                <input id="fileInput" name="file" type="file" accept="image/*,.pdf" aria-label="Elegir imagen o PDF" aria-describedby="fileHint">
+                <svg class="upload-icon" aria-hidden="true" width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="#0f766e" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" focusable="false">
+                    <path d="M24 31V9m0 0-8 8m8-8 8 8M12 27v8a4 4 0 0 0 4 4h16a4 4 0 0 0 4-4v-8" />
+                </svg>
+                <span class="dropzone-title">Arrastrá la factura o hacé clic para elegirla</span>
+                <span id="fileHint" class="dropzone-hint">Hasta 20 MB. Imágenes: 20 megapíxeles; PDF: hasta 20 páginas. Idealmente una foto centrada y con buena luz.</span>
             </label>
 
-            <button id="submitButton" type="submit" disabled>Extraer datos</button>
+            <div id="fileSummary" class="file-summary hidden" role="status" aria-live="polite">
+                <div>
+                    <span class="file-summary-label">Archivo listo para procesar</span>
+                    <strong id="fileName"></strong>
+                </div>
+                <button id="replaceFile" class="link-button" type="button">Elegir otro</button>
+            </div>
+
+            <div class="upload-actions">
+                <button id="viewFile" class="secondary-action" type="button" disabled>Ver archivo seleccionado</button>
+                <button id="submitButton" type="submit" disabled>Extraer datos</button>
+            </div>
         </form>
-        <p id="status" class="status">Esperando archivo...</p>
+        <p id="status" class="status" role="status" aria-live="polite">Esperando archivo...</p>
     </section>
 
     <section id="results" class="results hidden">
         <div class="panel meta-grid">
             <article>
-                <span class="meta-label">Lugar de compra</span>
+                <label class="meta-label" for="storeName">Lugar de compra</label>
                 <input id="storeName" class="meta-edit" type="text" value="" aria-label="Lugar de compra">
                 <small class="meta-hint">Cambio masivo en todas las filas</small>
             </article>
             <article>
-                <span class="meta-label">Fecha</span>
+                <label class="meta-label" for="dateValue">Fecha</label>
                 <input id="dateValue" class="meta-edit" type="date" value="" aria-label="Fecha">
                 <small class="meta-hint">Cambio masivo en todas las filas</small>
             </article>
             <article>
-                <span class="meta-label">Items detectados</span>
+                <span class="meta-label">Filas a exportar</span>
                 <strong id="itemCount">0</strong>
             </article>
         </div>
 
-        <div id="warningsPanel" class="panel warnings-panel hidden">
+        <div id="warningsPanel" class="panel warnings-panel hidden" role="region" aria-labelledby="warningsTitle" aria-live="polite">
             <div class="output-header">
                 <div>
-                    <h2>Advertencias para revisar</h2>
+                    <h2 id="warningsTitle" tabindex="-1">Advertencias para revisar</h2>
                     <span>Algunas líneas necesitan una revisión antes de copiar.</span>
                 </div>
             </div>
@@ -61,13 +80,15 @@
         <div id="itemsEditor" class="panel editor-block">
             <div class="output-header">
                 <div>
-                    <h2>Filas detectadas</h2>
-                        <span>Revisá y corregí los datos antes de copiar. Tus correcciones se guardan para próximos tickets.</span>
+                    <h2>2. Revisar filas detectadas</h2>
+                    <span>Revisá y corregí los datos antes de copiar. Descripción, marca y categoría se guardan cuando la marca original y la corregida son reconocidas.</span>
                 </div>
+                <button id="addItem" class="add-item-button" type="button">＋ Agregar línea</button>
             </div>
-            <p id="emptyItems" class="empty-items hidden">No se detectaron productos para revisar.</p>
-            <div class="table-scroll">
+            <p id="emptyItems" class="empty-items hidden">No hay productos para revisar.</p>
+            <div class="table-scroll" tabindex="0" role="region" aria-label="Filas editables de la factura">
                 <table id="itemsTable">
+                    <caption class="sr-only">Productos detectados y campos editables de la factura</caption>
                     <thead>
                     <tr>
                         <th>Usar</th>
@@ -79,7 +100,7 @@
                         <th>Unitario</th>
                         <th>Fecha</th>
                         <th>Estado</th>
-                        <th></th>
+                        <th>Acciones</th>
                     </tr>
                     </thead>
                     <tbody id="itemsBody"></tbody>
@@ -89,38 +110,58 @@
                 <span>Total calculado</span>
                 <strong id="totalValue">$ 0,00</strong>
             </div>
-        </div>
-
-        <div class="panel actions">
-            <button id="copyPipe" type="button">Copiar texto</button>
-            <button id="copyTsv" type="button">Copiar para Google Sheets</button>
-            <button id="copyRowsOnly" type="button">Copiar solo las filas</button>
-            <div id="copyToast" class="copy-toast" role="status" aria-live="polite"></div>
-        </div>
-
-        <div class="panel output-block">
-            <div class="output-header">
-                <h2>Texto para copiar</h2>
-                <span>Formato alternativo para guardar o compartir</span>
+            <div class="learn-feedback">
+                <p id="learnStatus" role="status" aria-live="polite"></p>
+                <button id="retryCorrections" class="hidden" type="button">Reintentar guardado</button>
             </div>
-            <textarea id="csvOutput" spellcheck="false"></textarea>
+        </div>
+
+        <div class="panel actions" aria-labelledby="actionsTitle">
+            <div class="output-header action-heading">
+                <div>
+                    <h2 id="actionsTitle">3. Copiar resultado</h2>
+                    <span>Elegí el formato según dónde lo vas a pegar.</span>
+                </div>
+            </div>
+            <button id="copyTsv" class="primary-action" type="button" disabled>Copiar tabla para Google Sheets</button>
+            <button id="copyRowsOnly" class="secondary-action" type="button" disabled>Copiar solo las filas</button>
+            <button id="copyPipe" class="secondary-action" type="button" disabled>Copiar texto con |</button>
+            <p id="exportHint" class="export-hint"></p>
+            <div id="copyToast" class="copy-toast" role="status" aria-live="polite"></div>
+            <div id="undoToast" class="undo-toast hidden" role="status" aria-live="polite">
+                <span>Fila eliminada.</span>
+                <button id="undoRemove" class="link-button" type="button">Deshacer</button>
+            </div>
         </div>
 
         <div class="panel output-block">
             <div class="output-header">
                 <h2>Texto para Google Sheets</h2>
-                <span>Listo para pegar directamente en una planilla</span>
+                <span>Tabla con encabezado. Para una planilla existente, usá «Copiar solo las filas».</span>
             </div>
-            <textarea id="tsvOutput" spellcheck="false"></textarea>
+            <textarea id="tsvOutput" spellcheck="false" readonly aria-label="Tabla para Google Sheets con encabezado"></textarea>
         </div>
+
+        <details class="panel output-block secondary-output">
+            <summary>Ver texto delimitado con |</summary>
+            <textarea id="csvOutput" spellcheck="false" readonly aria-label="Salida separada por barras"></textarea>
+        </details>
 
         <details class="panel output-block raw-block">
             <summary>Ver texto original para diagnóstico</summary>
-            <textarea id="rawOutput" spellcheck="false"></textarea>
+            <textarea id="rawOutput" spellcheck="false" readonly aria-label="Texto OCR original"></textarea>
         </details>
     </section>
 </main>
 
-<script src="/app.js?v=6"></script>
+<dialog id="filePreviewDialog" aria-labelledby="filePreviewTitle">
+    <div class="preview-header">
+        <h2 id="filePreviewTitle">Archivo a analizar</h2>
+        <button id="closeFilePreview" class="link-button" type="button">Cerrar</button>
+    </div>
+    <div id="filePreviewContent" class="file-preview-content"></div>
+</dialog>
+
+<script type="module" src="/app.js?v=8"></script>
 </body>
 </html>

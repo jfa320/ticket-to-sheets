@@ -7,7 +7,7 @@ import java.util.List;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record OcrDetection(
         String text,
-        double confidence,
+        Double confidence,
         List<List<Double>> box
 ) {
 }

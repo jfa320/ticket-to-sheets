@@ -1,0 +1,36 @@
+{
+  "name": "multipage-split-prices",
+  "split": "evaluation",
+  "ocr": {
+    "text": "ALMACEN DEMO\nFecha 06/08/2026\nPRODUCTO SUELTO\n0,750 x $ 1.200,00\n\nARTICULO VARIO\n1 x $ 500,00\nTOTAL 1.400,00",
+    "variant": "synthetic-multipage-text",
+    "score": 85.0,
+    "lines": [],
+    "detections": [],
+    "pages": [
+      {
+        "text": "ALMACEN DEMO\nFecha 06/08/2026\nPRODUCTO SUELTO\n0,750 x $ 1.200,00",
+        "variant": "synthetic-page-1",
+        "score": 85.0,
+        "lines": [],
+        "detections": []
+      },
+      {
+        "text": "ARTICULO VARIO\n1 x $ 500,00\nTOTAL 1.400,00",
+        "variant": "synthetic-page-2",
+        "score": 85.0,
+        "lines": [],
+        "detections": []
+      }
+    ]
+  },
+  "expected": {
+    "storeName": "Almacen Demo",
+    "date": "6/8/2026",
+    "total": "1400,00",
+    "items": [
+      {"description": "Producto Suelto", "quantity": "0,75", "unitPrice": "1200,00"},
+      {"description": "Articulo Vario", "quantity": "1", "unitPrice": "500,00"}
+    ]
+  }
+}

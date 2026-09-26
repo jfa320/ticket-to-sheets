@@ -6,7 +6,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 public record OcrLine(
         String text,
         double score,
-        double confidence,
+        Double confidence,
         double top,
         double left,
         double right,

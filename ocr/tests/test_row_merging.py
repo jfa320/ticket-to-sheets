@@ -4,7 +4,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from service import merge_boxes_into_rows
+from receipt_layout import merge_boxes_into_rows
 
 
 def detection(text, top, left, right, bottom, confidence=0.9):

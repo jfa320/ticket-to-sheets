@@ -11,10 +11,14 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @RestController
 @RequestMapping("/api")
 public class CorrectionController {
+
+    private static final Logger log = LoggerFactory.getLogger(CorrectionController.class);
 
     private final CorrectionMemory correctionMemory;
     private final BrandCatalog brandCatalog;
@@ -28,6 +32,7 @@ public class CorrectionController {
     public LearnResponse learn(@RequestBody @Valid CorrectionsRequest request) {
         List<CorrectionsRequest.Correction> corrections = request.corrections();
         if (corrections == null || corrections.isEmpty()) {
+            log.info("No hay correcciones para guardar");
             return new LearnResponse(0);
         }
 
@@ -49,6 +54,8 @@ public class CorrectionController {
             rememberBrandIfValid(correction.marca());
             saved++;
         }
+        log.info("Correcciones procesadas: recibidas={}, guardadas={}, comercio='{}'",
+                corrections.size(), saved, request.store());
         return new LearnResponse(saved);
     }
 

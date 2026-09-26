@@ -35,6 +35,12 @@ test-data/
 
 # Learned corrections (personal usage data, regenerated locally)
 data/corrections.json
+data/*.json.bak
+data/.*.tmp
+
+# Local diagnostics and generated repository maps
+logs/
+graphify-out/
 
 # IDE and OS files
 .idea/

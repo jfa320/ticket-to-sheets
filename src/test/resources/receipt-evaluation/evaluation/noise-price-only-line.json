@@ -1,0 +1,19 @@
+{
+  "name": "noise-price-only-line",
+  "split": "evaluation",
+  "ocr": {
+    "text": "ALMACEN DEMO\nFecha 19/08/2026\nPRODUCTO VALIDO 1.200,00\nNOTA\n900,00\nSUBTOT 1.200,00\nTOTAL 1.200,00",
+    "variant": "synthetic-text",
+    "score": 80.0,
+    "lines": [],
+    "detections": []
+  },
+  "expected": {
+    "storeName": "Almacen Demo",
+    "date": "19/8/2026",
+    "total": "1200,00",
+    "items": [
+      {"description": "Producto Valido", "quantity": "1", "unitPrice": "1200,00"}
+    ]
+  }
+}

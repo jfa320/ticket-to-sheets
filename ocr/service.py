@@ -24,7 +24,9 @@ import paddle
 from paddleocr import PaddleOCR
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 
+from receipt_layout import merge_boxes_into_rows
 from preprocess import remove_physical_lines
+from scoring import score_lines
 
 try:
     paddle.set_flags({"FLAGS_use_mkldnn": False})
@@ -106,14 +108,32 @@ def get_ocr(language):
 
 def purge_corrupted_paddle_cache():
     app.logger.warning("PaddleOCR cache is corrupted. Purging downloaded model archives and retrying.")
-    for path in glob.glob("/root/.paddleocr/whl/**/*.tar", recursive=True):
-        try:
-            os.remove(path)
-        except OSError as exc:
-            app.logger.warning("Could not remove corrupted archive %s: %s", path, exc)
+    cache_roots = {
+        os.path.join(os.path.expanduser("~"), ".paddleocr"),
+        os.path.join(os.environ.get("USERPROFILE", ""), ".paddleocr"),
+        "/root/.paddleocr",
+    }
+    for cache_root in cache_roots:
+        if not cache_root or not os.path.isdir(cache_root):
+            continue
+        for path in glob.glob(os.path.join(cache_root, "whl", "**", "*.tar"), recursive=True):
+            try:
+                os.remove(path)
+            except OSError as exc:
+                app.logger.warning("Could not remove corrupted archive %s: %s", path, exc)
 
-    for path in glob.glob("/root/.paddleocr/whl/**/__MACOSX", recursive=True):
-        shutil.rmtree(path, ignore_errors=True)
+        for path in glob.glob(os.path.join(cache_root, "whl", "**", "__MACOSX"), recursive=True):
+            shutil.rmtree(path, ignore_errors=True)
+
+    # PaddleOCR can leave an incomplete model directory after a failed download.
+    # Remove only directories that do not contain a usable inference model.
+    for cache_root in cache_roots:
+        whl_root = os.path.join(cache_root, "whl")
+        if not os.path.isdir(whl_root):
+            continue
+        for model_dir in glob.glob(os.path.join(whl_root, "**", "*_infer"), recursive=True):
+            if not os.path.isfile(os.path.join(model_dir, "inference.pdmodel")):
+                shutil.rmtree(model_dir, ignore_errors=True)
 
 
 def warmup_default_ocr():
@@ -180,53 +200,6 @@ def extract_detections(result):
 
 def extract_lines(result):
     return merge_boxes_into_rows(extract_detections(result))
-
-
-def merge_boxes_into_rows(boxes):
-    rows = []
-    indexed_boxes = [dict(item, detectionIndex=index) for index, item in enumerate(boxes)]
-    indexed_boxes.sort(key=lambda item: (item["top"], item["left"]))
-
-    for box in indexed_boxes:
-        center = box["top"] + box["height"] / 2
-        matching_row = None
-
-        for row in rows:
-            threshold = max(18, min(row["height"], box["height"]) * 0.45)
-            if abs(center - row["center"]) <= threshold:
-                matching_row = row
-                break
-
-        if matching_row is None:
-            rows.append({
-                "center": center,
-                "height": box["height"],
-                "boxes": [box],
-            })
-        else:
-            matching_row["boxes"].append(box)
-            matching_row["center"] = sum(item["top"] + item["height"] / 2 for item in matching_row["boxes"]) / len(matching_row["boxes"])
-            matching_row["height"] = max(matching_row["height"], box["height"])
-
-    lines = []
-    for row in rows:
-        row_boxes = sorted(row["boxes"], key=lambda item: item["left"])
-        text = " ".join(item["text"] for item in row_boxes).strip()
-        lines.append({
-            "text": text,
-            "score": min(item["confidence"] for item in row_boxes),
-            "confidence": min(item["confidence"] for item in row_boxes),
-            "top": min(item["top"] for item in row_boxes),
-            "left": min(item["left"] for item in row_boxes),
-            "right": max(item["right"] for item in row_boxes),
-            "bottom": max(item["bottom"] for item in row_boxes),
-            "width": max(item["right"] for item in row_boxes) - min(item["left"] for item in row_boxes),
-            "height": max(item["bottom"] for item in row_boxes) - min(item["top"] for item in row_boxes),
-            "detectionIndexes": [item["detectionIndex"] for item in row_boxes],
-        })
-
-    lines.sort(key=lambda item: (item["top"], item["left"]))
-    return lines
 
 
 def draw_overlay(image, detections):
@@ -322,44 +295,6 @@ def limit_image_size(image, max_side=2200):
     scale = max_side / largest_side
     new_size = (max(1, int(image.width * scale)), max(1, int(image.height * scale)))
     return image.resize(new_size, Image.Resampling.LANCZOS)
-
-
-def score_lines(lines):
-    if not lines:
-        return -1
-
-    text = "\n".join(line["text"] for line in lines)
-    lower = text.lower()
-    score = len(lines) * 4 + sum(len(line["text"]) for line in lines) / 30
-
-    for token in ["fecha", "total", "subtotal", "supermercado", "corazones", "consumidor"]:
-        if token in lower:
-            score += 8
-
-    for token in ["serenisima", "elegante", "higienol", "frutigran", "union", "vocacion", "papel", "salchich"]:
-        if token in lower:
-            score += 10
-    if any(char.isdigit() for char in text):
-        score += 6
-
-    price_lines = sum(1 for line in lines if any(ch.isdigit() for ch in line["text"]) and "," in line["text"])
-    score += price_lines * 8
-
-    item_lines = sum(1 for line in lines if looks_like_item_line(line["text"]))
-    score += item_lines * 14
-
-    return score
-
-
-def looks_like_item_line(text):
-    compact = text.strip().lower()
-    if len(compact) < 8:
-        return False
-    if any(token in compact for token in ["fecha", "hora", "total", "subtotal", "cuit", "direccion", "recibi", "vuelto"]):
-        return False
-    has_letters = any(char.isalpha() for char in compact)
-    has_price = any(char.isdigit() for char in compact) and ("," in compact or "." in compact)
-    return has_letters and has_price
 
 
 def ocr_image(ocr, image):

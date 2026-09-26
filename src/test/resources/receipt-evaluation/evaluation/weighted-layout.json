@@ -1,0 +1,32 @@
+{
+  "name": "weighted-layout",
+  "split": "evaluation",
+  "ocr": {
+    "text": "",
+    "variant": "synthetic-layout",
+    "score": 88.0,
+    "lines": [],
+    "detections": [
+      {"text": "ALMACEN DEMO", "confidence": 0.92, "box": [[10, 10], [170, 10], [170, 30], [10, 30]]},
+      {"text": "Fecha 06/08/2026", "confidence": 0.92, "box": [[10, 40], [190, 40], [190, 60], [10, 60]]},
+      {"text": "PRODUCTO SUELTO", "confidence": 0.92, "box": [[10, 100], [220, 100], [220, 125], [10, 125]]},
+      {"text": "0,750", "confidence": 0.92, "box": [[285, 100], [345, 100], [345, 125], [285, 125]]},
+      {"text": "1200,00", "confidence": 0.92, "box": [[420, 100], [510, 100], [510, 125], [420, 125]]},
+      {"text": "900,00", "confidence": 0.92, "box": [[600, 100], [680, 100], [680, 125], [600, 125]]},
+      {"text": "ARTICULO VARIO", "confidence": 0.92, "box": [[10, 140], [210, 140], [210, 165], [10, 165]]},
+      {"text": "1", "confidence": 0.92, "box": [[295, 140], [315, 140], [315, 165], [295, 165]]},
+      {"text": "500,00", "confidence": 0.92, "box": [[420, 140], [500, 140], [500, 165], [420, 165]]},
+      {"text": "500,00", "confidence": 0.92, "box": [[600, 140], [680, 140], [680, 165], [600, 165]]},
+      {"text": "TOTAL", "confidence": 0.92, "box": [[500, 190], [570, 190], [570, 215], [500, 215]]},
+      {"text": "1400,00", "confidence": 0.92, "box": [[600, 190], [690, 190], [690, 215], [600, 215]]}
+    ]
+  },
+  "expected": {
+    "storeName": "Almacen Demo",
+    "date": "6/8/2026",
+    "items": [
+      {"description": "Producto Suelto", "quantity": "0,75", "unitPrice": "1200,00"},
+      {"description": "Articulo Vario", "quantity": "1", "unitPrice": "500,00"}
+    ]
+  }
+}

@@ -301,7 +301,7 @@ class ReceiptParserServiceTest {
         assertEquals("29/6/2026", response.date());
         assertEquals("Ferreteria", response.items().get(0).categoria());
         assertEquals(7, response.itemCount());
-        assertEquals("11119,99", response.total());
+        assertEquals("9190,07", response.total());
         assertTrue(response.csv().contains("Soporte P/ Estante Bracket 250 X 350 - 20 Unid|Genérico|Ferreteria Tribulato|Ferreteria|1|3471,07|29/6/2026"), response.csv());
         assertTrue(response.csv().contains("Soporte P/ Estante Bracket 200 X 250 - 20 Unid|Genérico|Ferreteria Tribulato|Ferreteria|2|2561,98|29/6/2026"), response.csv());
     }

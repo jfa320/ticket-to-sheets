@@ -1,0 +1,31 @@
+{
+  "name": "column-layout",
+  "split": "development",
+  "ocr": {
+    "text": "",
+    "variant": "synthetic-layout",
+    "score": 90.0,
+    "lines": [],
+    "detections": [
+      {"text": "MERCADO NUEVO", "confidence": 0.94, "box": [[10, 10], [180, 10], [180, 30], [10, 30]]},
+      {"text": "Fecha 05/08/2026", "confidence": 0.94, "box": [[10, 40], [190, 40], [190, 60], [10, 60]]},
+      {"text": "DESCRIPCION", "confidence": 0.94, "box": [[10, 80], [150, 80], [150, 100], [10, 100]]},
+      {"text": "CANT", "confidence": 0.94, "box": [[260, 80], [320, 80], [320, 100], [260, 100]]},
+      {"text": "P.UNIT", "confidence": 0.94, "box": [[420, 80], [500, 80], [500, 100], [420, 100]]},
+      {"text": "IMPORTE", "confidence": 0.94, "box": [[600, 80], [700, 80], [700, 100], [600, 100]]},
+      {"text": "PRODUCTO FRESCO", "confidence": 0.94, "box": [[10, 120], [220, 120], [220, 145], [10, 145]]},
+      {"text": "2", "confidence": 0.94, "box": [[285, 120], [310, 120], [310, 145], [285, 145]]},
+      {"text": "1350,00", "confidence": 0.94, "box": [[420, 120], [510, 120], [510, 145], [420, 145]]},
+      {"text": "2700,00", "confidence": 0.94, "box": [[600, 120], [690, 120], [690, 145], [600, 145]]},
+      {"text": "TOTAL", "confidence": 0.94, "box": [[500, 170], [570, 170], [570, 195], [500, 195]]},
+      {"text": "2700,00", "confidence": 0.94, "box": [[600, 170], [690, 170], [690, 195], [600, 195]]}
+    ]
+  },
+  "expected": {
+    "storeName": "Mercado Nuevo",
+    "date": "5/8/2026",
+    "items": [
+      {"description": "Producto Fresco", "quantity": "2", "unitPrice": "1350,00"}
+    ]
+  }
+}

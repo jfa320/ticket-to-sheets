@@ -7,6 +7,7 @@ App local para subir una foto o PDF de un ticket, correr OCR gratis con PaddleOC
 - extrae texto de imagen o PDF con PaddleOCR
 - detecta fecha y lugar de compra
 - arma filas con estas columnas: `Descripción|Marca|Lugar de compra|Categoria|Cantidad|Precio unitario|Fecha`
+- usa las cajas OCR para interpretar columnas de descripcion, cantidad, precio unitario e importe cuando el ticket viene en formato tabular
 - muestra un `Total calculado` debajo de las filas, sumando cantidad por precio unitario de los items extraidos (nunca el total del OCR)
 - descarta lineas de subtotal y usa `Genérico` cuando no reconoce la marca
 - corrige marcas OCR con Levenshtein: menos de 30% usa `Genérico`, de 30% a 70% deja la marca dudosa para revisar y más de 70% aplica la marca automáticamente
@@ -31,7 +32,7 @@ App local para subir una foto o PDF de un ticket, correr OCR gratis con PaddleOC
 docker compose up --build -d
 ```
 
-3. En el primer arranque el contenedor OCR descarga los modelos. Espera a que termine antes de subir la primera factura.
+3. En el primer arranque el contenedor OCR descarga y prepara los modelos. Compose comprueba `ocrReady` y mantiene la app esperando hasta que OCR está listo; esa primera preparación puede tardar.
 4. Abre la app en:
 
 ```text
@@ -51,6 +52,15 @@ docker compose logs -f app paddleocr
 ```bash
 docker compose down
 ```
+
+## Validacion local
+
+```bash
+mvn test
+python -m unittest discover -s ocr/tests
+```
+
+Los tests Java incluyen fixtures sintéticos en `src/test/resources/receipt-evaluation` y reportan aciertos exactos por campo. El banco cubre texto OCR multipágina, cantidad/precio separados, líneas de precio sueltas y detecciones geométricas, sin versionar tickets reales.
 
 ## Desarrollo local sin Docker para Spring Boot
 
@@ -78,22 +88,28 @@ mvn spring-boot:run
 - Las filas que hoy se descartan pero coinciden con algo aprendido se recuperan con una advertencia "Recuperado de memoria".
 - Solo se aprenden marca, categoria y descripcion. Precio y fecha siempre vienen del ticket actual.
 
+## Límites de archivos
+
+- El tamaño máximo de carga es 20 MB.
+- Las imágenes se validan antes de decodificarlas: máximo 20 megapíxeles y 10.000 píxeles por lado.
+- Los PDF admiten hasta 20 páginas. Cada página se limita a 20 megapíxeles al renderizarse a 300 DPI y se procesa de a una para no mantener todas las imágenes en memoria.
+- El formato se comprueba por el contenido del archivo, no solo por el nombre. PDF cifrados, dañados o con dimensiones superiores al límite se rechazan con un mensaje.
+- Los límites de imagen y PDF se pueden ajustar en `application.properties` (`app.upload.*` y `app.pdf.*`).
+
 ## Limites actuales
 
 - la marca se estima a partir del inicio de la descripcion
-- la categoria se fija en `Supermercado`
-- la cantidad se asume `1`, salvo cuando el texto sugiere multiplicador explicito tipo `x4`
+- la categoria base se infiere por comercio conocido y usa `Supermercado` como fallback
+- la cantidad se lee desde multiplicadores o columnas OCR cuando son claras; si no hay evidencia confiable, queda en `1`
 - tickets muy borrosos o torcidos van a necesitar mejores reglas o preprocesado
 - el primer build de Docker puede tardar porque descarga la imagen y los modelos de OCR
-- para fotos de tickets, el OCR ahora prueba varias versiones de la imagen y elige la mas util automaticamente
-- las filas nuevas no se cargan manualmente desde la UI; se corrigen o eliminan las filas detectadas
+- para fotos de tickets, el OCR prueba varias versiones de la imagen y elige la mas util con un score estructural, sin favorecer marcas concretas
+- la tabla permite agregar líneas manualmente, además de editar o eliminar las filas detectadas
 - el precio total no forma parte de la salida del MVP
 - el aprendizaje guarda solo marca, categoria y descripcion; no almacena precios ni datos de tarjetas
 - `data/corrections.json` no se versiona en git; en Docker persiste por el volumen `./data:/app/data`
 
 ## Mejoras faciles para despues
 
-- diccionario de marcas frecuentes
-- categorias configurables
-- exportacion directa a Google Sheets API
-- guardar historial de tickets procesados
+- ampliar el banco de evaluación con más transcripciones sintéticas o anonimizadas
+- permitir configurar categorías desde archivos locales

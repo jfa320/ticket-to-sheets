@@ -1,0 +1,29 @@
+{
+  "name": "layout-quality-signals",
+  "split": "evaluation",
+  "ocr": {
+    "text": "",
+    "variant": "synthetic-layout",
+    "score": 82.0,
+    "lines": [],
+    "detections": [
+      {"text": "ALMACEN DEMO", "confidence": 0.95, "box": [[10, 10], [170, 10], [170, 30], [10, 30]]},
+      {"text": "Fecha 12/08/2026", "confidence": 0.95, "box": [[10, 40], [210, 40], [210, 60], [10, 60]]},
+      {"text": "LECHE ENTERA 1L", "confidence": 0.42, "box": [[10, 100], [230, 100], [230, 124], [10, 124]]},
+      {"text": "1200,00", "confidence": 0.96, "box": [[500, 100], [580, 100], [580, 124], [500, 124]]},
+      {"text": "GALLETITAS DE AVENA", "confidence": 0.94, "box": [[10, 150], [810, 150], [810, 174], [10, 174]]},
+      {"text": "850,00", "confidence": 0.96, "box": [[830, 150], [900, 150], [900, 174], [830, 174]]},
+      {"text": "TOTAL", "confidence": 0.95, "box": [[500, 190], [570, 190], [570, 214], [500, 214]]},
+      {"text": "2050,00", "confidence": 0.95, "box": [[600, 190], [690, 190], [690, 214], [600, 214]]}
+    ]
+  },
+  "expected": {
+    "storeName": "Almacen Demo",
+    "date": "12/8/2026",
+    "total": "2050,00",
+    "items": [
+      {"description": "Leche 1l", "quantity": "1", "unitPrice": "1200,00", "state": "AMBIGUOUS"},
+      {"description": "Galletitas", "quantity": "1", "unitPrice": "850,00", "state": "AMBIGUOUS"}
+    ]
+  }
+}

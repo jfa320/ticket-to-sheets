@@ -22,7 +22,9 @@ COPY ocr/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir --default-timeout=180 --retries=5 -r requirements.txt
 
 COPY ocr/service.py ./service.py
+COPY ocr/receipt_layout.py ./receipt_layout.py
 COPY ocr/preprocess.py ./preprocess.py
+COPY ocr/scoring.py ./scoring.py
 COPY ocr/tests ./tests
 
 EXPOSE 5000
