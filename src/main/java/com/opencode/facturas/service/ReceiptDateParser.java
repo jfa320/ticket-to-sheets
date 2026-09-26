@@ -60,7 +60,38 @@ final class ReceiptDateParser {
             }
         }
 
+        for (String line : lines) {
+            if (isUnlabeledReceiptDateLine(line)) {
+                Optional<String> date = findDateInLine(line);
+                if (date.isPresent()) {
+                    return date;
+                }
+            }
+        }
+
         return Optional.empty();
+    }
+
+    private boolean isUnlabeledReceiptDateLine(String line) {
+        String normalized = lineAnalyzer.normalize(line);
+        if (normalized.contains("actividad") || normalized.contains("venc")
+                || normalized.contains("vto") || normalized.contains("caduc")
+                || normalized.contains("elabor") || normalized.contains("fabric")
+                || normalized.contains("cuit")) {
+            return false;
+        }
+        Matcher dateMatcher = ReceiptLineAnalyzer.DATE_PATTERN.matcher(normalizeSeparators(line));
+        if (!dateMatcher.find()) {
+            return false;
+        }
+        String withoutDate = line.substring(0, dateMatcher.start()) + " " + line.substring(dateMatcher.end());
+        if (lineAnalyzer.containsMoney(withoutDate)) {
+            return false;
+        }
+        withoutDate = withoutDate.replaceAll("(?i)\\b(?:hora|hs|h|emision|venta|compra|ticket|comprobante|fecha|f)\\b", " ")
+                .replaceAll("\\b\\d{1,2}:\\d{2}(?::\\d{2})?\\b", " ")
+                .replaceAll("[^\\p{L}]+", " ").trim();
+        return withoutDate.isBlank();
     }
 
     private boolean isReceiptDateLabel(String normalizedLine) {
@@ -95,12 +126,15 @@ final class ReceiptDateParser {
     }
 
     private LocalDate parse(String rawDate) {
-        String[] parts = rawDate.replace('-', '/').split("/");
+        String[] parts = rawDate.replace('-', '/').replace('.', '/').split("/");
         if (parts.length == 2) {
             int currentYear = LocalDate.now(clock).getYear();
             return LocalDate.of(currentYear, Integer.parseInt(parts[1]), Integer.parseInt(parts[0]));
         }
         if (parts.length == 3) {
+            if (parts[0].length() == 4) {
+                return LocalDate.of(Integer.parseInt(parts[0]), Integer.parseInt(parts[1]), Integer.parseInt(parts[2]));
+            }
             int year = Integer.parseInt(parts[2]);
             if (year < 100) {
                 year += 2000;

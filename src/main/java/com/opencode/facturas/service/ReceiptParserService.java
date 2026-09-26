@@ -133,6 +133,9 @@ public class ReceiptParserService {
         log.info("Iniciando parsing: líneas={}, caracteres={}, candidatosLayout={}",
                 lines.size(), rawText.length(), layoutCandidates.values().stream().mapToInt(List::size).sum());
         String date = dateParser.extractNormalized(lines);
+        if (date.isBlank() && !rawText.isBlank()) {
+            date = dateParser.extractNormalized(rawText.lines().toList());
+        }
         String storeName = storeNameMapper.resolve(lines, detectStoreName(lines));
         List<String> warnings = new ArrayList<>();
         List<ReceiptItem> items = new ArrayList<>(pedidosYaParser.supports(lines)

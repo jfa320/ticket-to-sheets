@@ -75,6 +75,30 @@ class ReceiptLayoutReaderTest {
     }
 
     @Test
+    void excludesOcrTotalFromLayoutAndFindsDateInRawText() {
+        ReceiptParserService parser = parser();
+        OcrResult ocr = new OcrResult(
+                "MERCADO NUEVO\n26/09/2026 18:34\nLECHE ENTERA 1200,00\nT0TAL 1200,00",
+                List.of(),
+                List.of(
+                        detection("MERCADO NUEVO", 10, 10, 180, 30),
+                        detection("LECHE ENTERA", 80, 10, 180, 105),
+                        detection("1200,00", 80, 500, 580, 105),
+                        detection("T0TAL", 120, 500, 580, 145),
+                        detection("1200,00", 120, 600, 690, 145)
+                ),
+                "original",
+                40.0
+        );
+
+        ExtractResponse response = parser.parse(ocr);
+
+        assertEquals("26/9/2026", response.date());
+        assertEquals(1, response.itemCount(), response.csv());
+        assertEquals("1200,00", response.total());
+    }
+
+    @Test
     void keepsPdfPagesSeparateWhenCoordinatesRepeat() {
         ReceiptParserService parser = parser();
         OcrResult firstPage = new OcrResult(

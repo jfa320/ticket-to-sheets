@@ -212,7 +212,7 @@ Endpoint de aprendizaje:
 - `ReceiptLayoutReader`: reconstruye filas desde `OcrDetection` por pagina, detecta candidatos tabulares con cantidad/precio unitario/importe y evita mezclar coordenadas iguales de paginas distintas.
 - `ReceiptLineAnalyzer`: concentra normalizacion OCR, deteccion de metadata/resumen, clasificacion de lineas y extraccion de valores monetarios.
 - `ReceiptDateParser`: extrae y normaliza fechas de ticket; acepta un `Clock` para probar de forma determinista fechas sin anio.
-- `ReceiptAmounts` y `ReceiptTotalCalculator`: parsean/formatean importes `es-AR` y calculan el total desde items e impuestos detectados. El formateador se crea por llamada para evitar estado compartido entre requests.
+- `ReceiptAmounts` y `ReceiptTotalCalculator`: parsean/formatean importes `es-AR` y calculan el total desde los items reconocidos. El formateador se crea por llamada para evitar estado compartido entre requests.
 - `PedidosYaReceiptParser`: contiene el camino especial para cantidades, kg, precios inline o en lineas siguientes y warnings propios de capturas de PedidosYa Market.
 - `BrandCatalog`: carga `data/brands.json`, busca marcas por alias al inicio o en cualquier parte de la descripcion y puede recordar marcas nuevas escribiendo el JSON. Ignora varias marcas genericas/no validas.
 - `StoreNameMapper`: carga `store-mappings.json` desde classpath, normaliza texto OCR y resuelve nombres canonicos de comercio. Tiene reglas hardcodeadas para variantes de `Zou Wenguo`/`Los Tres Corazones`.
@@ -300,14 +300,14 @@ No existe BPM/Flowable. No hay dependencias, archivos BPMN, procesos ni integrac
 16. `app.js` compara cada item editado contra el snapshot original y, con debounce, envia a `POST /api/corrections` solo los campos marca/categoria/descripcion que cambiaron.
 17. `ReceiptParserService` consulta `CorrectionMemory` para aplicar lo aprendido (override) y recuperar lineas perdidas (warnings "Recuperado de memoria").
 18. Las lineas `subtotal`, `subtot` y variantes se descartan como resumen, nunca como item; si no se reconoce una marca, se usa `Generico`.
-19. `ReceiptTotalCalculator` calcula `total` sumando `cantidad * precioUnitario` de los items extraidos e impuestos detectados, nunca leyendo el total impreso del OCR; la UI lo recalcula al editar o deseleccionar filas.
+19. `ReceiptTotalCalculator` calcula `total` sumando `cantidad * precioUnitario` de los items extraidos, nunca leyendo el total impreso del OCR; la UI lo recalcula al editar o deseleccionar filas.
 20. `BrandCatalog` aplica Levenshtein sobre la primera palabra: menos de 30% produce `Genérico`, 30%-70% deja la palabra OCR editable con warning y más de 70% aplica la marca del catálogo.
 21. La memoria solo aprende filas cuya marca original no era `Genérico` y cuyo resultado es una marca real; una fila originalmente `Genérico` no guarda ninguna edición.
 22. La categoría base se determina por comercio: `Los Tres Corazones`, `PedidosYa Market - San Miguel II` y `Tienda Filipa` usan `Supermercado`; `Perfumerías Pigmento` usa `Perfumeria`; `Central de Sabores` usa `Panaderia`; `Estancia San Francisco` usa `Otros`; `Farmacias TKL San Miguel` usa `Farmacia`; y `Tuti Fruti` usa `Verduleria`. Una categoría vacía en memoria nunca borra la categoría detectada.
 
 ## Frontend
 
-- `index.html`: pagina unica orientada a usuario final, con carga de archivo, metadata, advertencias accionables, tabla editable, total calculado, botones de copia y texto original oculto en un desplegable de diagnostico.
+- `index.html`: pagina unica orientada a usuario final, con carga de archivo, metadata, advertencias accionables, tabla editable, total calculado, copia principal para Sheets sin encabezado y texto original oculto en un desplegable de diagnostico.
 - `styles.css`: estilos responsive, tema visual beige/verde, tipografias Manrope y Space Grotesk, layout de paneles y media query para mobile.
 - `app.js`: controla estado de seleccion de archivo, submit async, llamada al backend, manejo de errores `{message}`, render de items/warnings con badge `Memorizado`, regeneracion de salidas desde la tabla, envio automatico de correcciones con debounce y copia con `navigator.clipboard.writeText`.
 

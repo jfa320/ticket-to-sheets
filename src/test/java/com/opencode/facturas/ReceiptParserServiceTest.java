@@ -83,6 +83,23 @@ class ReceiptParserServiceTest {
     }
 
     @Test
+    void ignoresOcrTotalVariantsAndAmountToPay() {
+        ExtractResponse response = parserService.parse("""
+                MERCADO NUEVO
+                26/09/2026 18:34
+                LECHE ENTERA 1200,00
+                T0TAL 1200,00
+                MONTO A PAGAR
+                1200,00
+                """);
+
+        assertEquals("26/9/2026", response.date());
+        assertEquals(1, response.itemCount(), response.csv());
+        assertEquals("Leche", response.items().get(0).descripcion());
+        assertEquals("1200,00", response.total());
+    }
+
+    @Test
     void infersUppercaseBrandBeforeProductDescription() {
         ExtractResponse response = parserService.parse("""
                 LOS TRES CORAZONES

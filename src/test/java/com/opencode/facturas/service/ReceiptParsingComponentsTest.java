@@ -36,6 +36,17 @@ class ReceiptParsingComponentsTest {
     }
 
     @Test
+    void findsUnlabeledDatesAndPrioritizesExplicitReceiptDate() {
+        ReceiptDateParser parser = new ReceiptDateParser(lineAnalyzer);
+
+        assertEquals("26/9/2026", parser.extractNormalized(List.of("MERCADO", "26/09/2026 18:34", "PRODUCTO 100,00")));
+        assertEquals("26/9/2026", parser.extractNormalized(List.of("MERCADO", "Emision 26.09.2026", "PRODUCTO 100,00")));
+        assertEquals("26/9/2026", parser.extractNormalized(List.of("MERCADO", "2026-09-26", "PRODUCTO 100,00")));
+        assertEquals("26/9/2026", parser.extractNormalized(List.of("Vto 30/09/2026", "Fecha 26/09/2026")));
+        assertEquals("", parser.extractNormalized(List.of("Vto 30/09/2026", "PRODUCTO 100,00")));
+    }
+
+    @Test
     void parsesAndFormatsArgentineAmountsWithoutSharedFormatterState() {
         ReceiptAmounts amounts = new ReceiptAmounts();
 
