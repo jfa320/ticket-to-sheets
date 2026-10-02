@@ -27,7 +27,7 @@ const retryCorrections = byId('retryCorrections');
 const copyToast = byId('copyToast');
 const undoToast = byId('undoToast');
 const undoRemove = byId('undoRemove');
-const copyButtons = [byId('copyPipe'), byId('copyTsv'), byId('copyRowsOnly')];
+const copyButtons = [byId('copyPipe'), byId('copyRowsOnly')];
 let receipt = null;
 let correctionSaver = null;
 let output = buildExports([]);
@@ -257,8 +257,7 @@ retryCorrections.addEventListener('click', () => { void correctionSaver?.flush()
 addItemButton.addEventListener('click', addManualItem);
 
 byId('copyPipe').addEventListener('click', () => copyText(output.pipe, 'Texto copiado.'));
-byId('copyTsv').addEventListener('click', () => copyText(output.tsv, 'Tabla con encabezado copiada para Google Sheets.'));
-byId('copyRowsOnly').addEventListener('click', () => copyText(output.rowsOnly, 'Filas sin encabezado copiadas.'));
+byId('copyRowsOnly').addEventListener('click', () => copyText(output.rowsOnly, 'Filas copiadas para Google Sheets.'));
 undoRemove.addEventListener('click', () => {
     if (!receipt || !removedItem) return;
     receipt.items.splice(removedItem.index, 0, removedItem.item);
