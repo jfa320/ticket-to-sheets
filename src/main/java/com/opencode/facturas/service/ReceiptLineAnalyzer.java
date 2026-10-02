@@ -10,7 +10,9 @@ import java.util.regex.Pattern;
 
 final class ReceiptLineAnalyzer {
 
-    static final Pattern DATE_PATTERN = Pattern.compile("(\\d{1,2}\\s*[/-]\\s*\\d{1,2}(?:\\s*[/-]\\s*\\d{2,4})?)");
+    static final Pattern DATE_PATTERN = Pattern.compile(
+            "(?<!\\d)((?:\\d{4}\\s*[./-]\\s*\\d{1,2}\\s*[./-]\\s*\\d{1,2})|(?:\\d{1,2}\\s*[./-]\\s*\\d{1,2}(?:\\s*[./-]\\s*\\d{2,4})?))(?!\\d)"
+    );
 
     private static final Pattern MONEY_PATTERN = Pattern.compile(
             "(?:\\$\\s*\\d+[\\.,]\\d{5}|\\$\\s*\\d+(?:[\\.,]\\d{3})*(?:[\\.,]\\d{2})?|\\d+(?:[\\.,]\\d{3})*[\\.,]\\d{2})(?!\\d)"
@@ -81,6 +83,12 @@ final class ReceiptLineAnalyzer {
     boolean isSummary(String normalized) {
         String compact = normalized.replace(" ", "");
         return compact.contains("subtot")
+                || compact.contains("total")
+                || compact.contains("t0tal")
+                || compact.contains("tota1")
+                || compact.contains("t0ta1")
+                || compact.contains("totai")
+                || compact.contains("apagar")
                 || (normalized.contains("neto") && normalized.contains("gravado"));
     }
 

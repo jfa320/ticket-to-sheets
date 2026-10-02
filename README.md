@@ -5,15 +5,15 @@ App local para subir una foto o PDF de un ticket, correr OCR gratis con PaddleOC
 ## Que hace
 
 - extrae texto de imagen o PDF con PaddleOCR
-- detecta fecha y lugar de compra
+- detecta fecha y lugar de compra; admite fechas sin etiqueta, con `/`, `-` o `.`, además de las etiquetadas
 - arma filas con estas columnas: `Descripción|Marca|Lugar de compra|Categoria|Cantidad|Precio unitario|Fecha`
 - usa las cajas OCR para interpretar columnas de descripcion, cantidad, precio unitario e importe cuando el ticket viene en formato tabular
 - muestra un `Total calculado` debajo de las filas, sumando cantidad por precio unitario de los items extraidos (nunca el total del OCR)
-- descarta lineas de subtotal y usa `Genérico` cuando no reconoce la marca
+- descarta lineas de subtotal, total y monto a pagar; usa `Genérico` cuando no reconoce la marca
 - corrige marcas OCR con Levenshtein: menos de 30% usa `Genérico`, de 30% a 70% deja la marca dudosa para revisar y más de 70% aplica la marca automáticamente
 - genera dos salidas:
   - formato con `|` para guardar o copiar
-  - formato tabulado para pegar directo en Google Sheets
+  - formato tabulado sin encabezado para pegar directo en Google Sheets
 - muestra una tabla editable para corregir o eliminar filas antes de copiar
 - marca filas ambiguas y muestra advertencias completas cuando una línea no pudo confirmarse
 - aprende de tus correcciones (marca, categoría y descripción) y las aplica en el próximo ticket del mismo comercio
@@ -76,7 +76,7 @@ mvn spring-boot:run
 1. Subi una foto bien centrada del ticket.
 2. Si la foto tiene mucho fondo, mano o monitor alrededor, intenta que el ticket ocupe la mayor parte de la imagen.
 3. Revisa las filas ambiguas y las advertencias; edita o elimina lo que corresponda.
-4. Usa `Copiar formato para Sheets`.
+4. Usa `Copiar tabla para Google Sheets`; se copian solo las filas seleccionadas, sin encabezado.
 5. Pega en Google Sheets.
 6. Si algun item sale raro, revisa el bloque `Texto OCR crudo`.
 

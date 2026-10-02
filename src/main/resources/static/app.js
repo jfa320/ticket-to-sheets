@@ -27,7 +27,7 @@ const retryCorrections = byId('retryCorrections');
 const copyToast = byId('copyToast');
 const undoToast = byId('undoToast');
 const undoRemove = byId('undoRemove');
-const copyButtons = [byId('copyPipe'), byId('copyRowsOnly')];
+const copyButtons = [byId('copyPipe'), byId('copyTsv')];
 let receipt = null;
 let correctionSaver = null;
 let output = buildExports([]);
@@ -183,7 +183,7 @@ function refresh() {
     byId('itemCount').textContent = output.count;
     byId('totalValue').textContent = formatTotal(output.total);
     byId('csvOutput').value = output.pipe;
-    byId('tsvOutput').value = output.tsv;
+    byId('tsvOutput').value = output.rowsOnly;
     const errors = validationErrors(receipt.items);
     copyButtons.forEach(button => { button.disabled = output.count === 0 || errors.length > 0; });
     renderWarnings([...receipt.warnings, ...errors.map(error => error.message)], byId('warningsPanel'), byId('warningsList'));
@@ -245,6 +245,7 @@ function addManualItem() {
 function updateCommonField(field, value) {
     if (!receipt || loading) return;
     const cleaned = value.trim();
+    if (field === 'fecha') receipt.date = cleaned;
     receipt.items.forEach(item => { item[field] = cleaned; });
     itemsBody.querySelectorAll(`[data-field="${field}"]`).forEach(cell => { cell.textContent = cleaned; });
     refresh();
@@ -257,7 +258,7 @@ retryCorrections.addEventListener('click', () => { void correctionSaver?.flush()
 addItemButton.addEventListener('click', addManualItem);
 
 byId('copyPipe').addEventListener('click', () => copyText(output.pipe, 'Texto copiado.'));
-byId('copyRowsOnly').addEventListener('click', () => copyText(output.rowsOnly, 'Filas copiadas para Google Sheets.'));
+byId('copyTsv').addEventListener('click', () => copyText(output.rowsOnly, 'Filas copiadas para Google Sheets.'));
 undoRemove.addEventListener('click', () => {
     if (!receipt || !removedItem) return;
     receipt.items.splice(removedItem.index, 0, removedItem.item);

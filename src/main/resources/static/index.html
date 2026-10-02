@@ -123,7 +123,7 @@
                     <span>Elegí el formato según dónde lo vas a pegar.</span>
                 </div>
             </div>
-            <button id="copyRowsOnly" class="primary-action" type="button" disabled>Copiar para Google Sheets</button>
+            <button id="copyTsv" class="primary-action" type="button" disabled>Copiar tabla para Google Sheets</button>
             <button id="copyPipe" class="secondary-action" type="button" disabled>Copiar texto con |</button>
             <p id="exportHint" class="export-hint"></p>
             <div id="copyToast" class="copy-toast" role="status" aria-live="polite"></div>
@@ -136,9 +136,9 @@
         <div class="panel output-block">
             <div class="output-header">
                 <h2>Texto para Google Sheets</h2>
-                <span>Vista previa con encabezado. El botón copia solo las filas marcadas, sin encabezado.</span>
+                <span>Solo las filas seleccionadas, sin encabezado.</span>
             </div>
-            <textarea id="tsvOutput" spellcheck="false" readonly aria-label="Tabla para Google Sheets con encabezado"></textarea>
+            <textarea id="tsvOutput" spellcheck="false" readonly aria-label="Filas para Google Sheets sin encabezado"></textarea>
         </div>
 
         <details class="panel output-block secondary-output">
@@ -161,6 +161,6 @@
     <div id="filePreviewContent" class="file-preview-content"></div>
 </dialog>
 
-<script type="module" src="/app.js?v=8"></script>
+<script type="module" src="/app.js?v=9"></script>
 </body>
 </html>
