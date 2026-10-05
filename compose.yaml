@@ -8,6 +8,10 @@ services:
       APP_OCR_ENDPOINT: http://paddleocr:5000/ocr
       APP_OCR_HEALTH_ENDPOINT: http://paddleocr:5000/health
       APP_OCR_LANGUAGE: es
+      APP_SHEETS_CREDENTIALS_PATH: ${APP_SHEETS_CREDENTIALS_PATH:-/app/data/google-service-account.json}
+      APP_SHEETS_CONFIG_PATH: /app/data/sheets-config.json
+      APP_SHEETS_HISTORY_PATH: /app/data/sheets-history.json
+      APP_SHEETS_TIMEOUT_MS: ${APP_SHEETS_TIMEOUT_MS:-15000}
       TZ: America/Argentina/Buenos_Aires
       JAVA_TOOL_OPTIONS: -Duser.timezone=America/Argentina/Buenos_Aires
     ports:
@@ -34,6 +38,9 @@ services:
       MKL_NUM_THREADS: "1"
       NUMEXPR_NUM_THREADS: "1"
       APP_OCR_DEBUG: ${APP_OCR_DEBUG:-false}
+      OCR_IMAGE_CORRECTIONS: ${OCR_IMAGE_CORRECTIONS:-true}
+      OCR_TARGETED_RETRY: ${OCR_TARGETED_RETRY:-true}
+      OCR_VARIANT_FUSION: ${OCR_VARIANT_FUSION:-true}
       OCR_DEBUG_DIR: /app/debug
     expose:
       - "5000"

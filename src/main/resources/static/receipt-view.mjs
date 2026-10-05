@@ -62,7 +62,8 @@ export function renderItems(items, body, {onEdit, onSelect, onRemove}) {
         stateCell.dataset.label = 'Estado';
         const badge = document.createElement('span');
         const [state, label] = item.estado === 'AMBIGUOUS' ? ['ambiguous', 'Ambiguo']
-            : item.estado === 'LEARNED' ? ['learned', 'Memorizado'] : ['correct', 'Correcto'];
+            : item.estado === 'LEARNED' ? ['learned', 'Memorizado']
+            : item.estado === 'HISTORY' ? ['history', 'Historial'] : ['correct', 'Correcto'];
         badge.className = `status-badge status-${state}`;
         badge.textContent = label;
         stateCell.append(badge);

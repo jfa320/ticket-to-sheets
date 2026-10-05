@@ -38,6 +38,51 @@ class RowMergingTest(unittest.TestCase):
             "ELEGANTE PANLE*100UN 1100,00",
         ], [line["text"] for line in lines])
 
+    def test_dense_rows_stay_separate_at_different_image_scales(self):
+        for scale in (0.25, 0.5, 1, 2, 4):
+            with self.subTest(scale=scale):
+                boxes = [
+                    detection("PRODUCTO ALFA", 0, 0, 100, 8),
+                    detection("100,00", 1, 150, 190, 8),
+                    detection("PRODUCTO BETA", 12, 0, 100, 20),
+                    detection("200,00", 13, 150, 190, 20),
+                ]
+                scaled = [
+                    detection(box["text"], box["top"] * scale, box["left"] * scale,
+                              box["right"] * scale, box["bottom"] * scale)
+                    for box in boxes
+                ]
+
+                lines = merge_boxes_into_rows(scaled)
+
+                self.assertEqual(["PRODUCTO ALFA 100,00", "PRODUCTO BETA 200,00"],
+                                 [line["text"] for line in lines])
+                self.assertEqual([[0, 1], [2, 3]], [line["detectionIndexes"] for line in lines])
+
+    def test_aligns_description_and_smaller_price_on_same_baseline(self):
+        for scale in (0.25, 1, 3):
+            with self.subTest(scale=scale):
+                boxes = [
+                    detection("PRODUCTO ALFA", 100 * scale, 0, 100 * scale, 140 * scale),
+                    detection("1200,00", 124 * scale, 150 * scale, 200 * scale, 140 * scale),
+                ]
+
+                self.assertEqual(["PRODUCTO ALFA 1200,00"],
+                                 [line["text"] for line in merge_boxes_into_rows(boxes)])
+
+    def test_assigns_price_to_closest_matching_row(self):
+        boxes = [
+            detection("PRODUCTO ALFA", 0, 0, 100, 20),
+            detection("PRODUCTO BETA", 12, 0, 100, 32),
+            detection("200,00", 13, 150, 190, 21),
+        ]
+
+        self.assertEqual(["PRODUCTO ALFA", "PRODUCTO BETA 200,00"],
+                         [line["text"] for line in merge_boxes_into_rows(boxes)])
+
+    def test_empty_detections_produce_no_rows(self):
+        self.assertEqual([], merge_boxes_into_rows([]))
+
 
 if __name__ == "__main__":
     unittest.main()

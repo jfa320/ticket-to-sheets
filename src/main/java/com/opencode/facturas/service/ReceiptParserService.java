@@ -27,6 +27,7 @@ public class ReceiptParserService {
     private final StoreNameMapper storeNameMapper;
     private final BrandCatalog brandCatalog;
     private final CorrectionMemory correctionMemory;
+    private final SheetsHistoryService sheetsHistory;
     private final ReceiptLineAnalyzer lineAnalyzer = new ReceiptLineAnalyzer();
     private final ReceiptDateParser dateParser = new ReceiptDateParser(lineAnalyzer);
     private final ReceiptAmounts amounts = new ReceiptAmounts();
@@ -95,11 +96,17 @@ public class ReceiptParserService {
         this(storeNameMapper, brandCatalog, new CorrectionMemory(new com.fasterxml.jackson.databind.ObjectMapper()));
     }
 
-    @Autowired
     public ReceiptParserService(StoreNameMapper storeNameMapper, BrandCatalog brandCatalog, CorrectionMemory correctionMemory) {
+        this(storeNameMapper, brandCatalog, correctionMemory, null);
+    }
+
+    @Autowired
+    public ReceiptParserService(StoreNameMapper storeNameMapper, BrandCatalog brandCatalog, CorrectionMemory correctionMemory,
+                                SheetsHistoryService sheetsHistory) {
         this.storeNameMapper = storeNameMapper;
         this.brandCatalog = brandCatalog;
         this.correctionMemory = correctionMemory;
+        this.sheetsHistory = sheetsHistory;
     }
 
     public ExtractResponse parse(String rawText) {
@@ -143,6 +150,7 @@ public class ReceiptParserService {
                 : extractItems(lines, storeName, date, warnings, layoutCandidates));
         items.addAll(recoverFromMemory(lines, storeName, date, warnings, items));
         items.replaceAll(item -> applyLearned(item, storeName));
+        if (sheetsHistory != null) items = new ArrayList<>(sheetsHistory.enrich(items, warnings));
         String total = totalCalculator.calculate(items);
 
         ExtractResponse response = new ExtractResponse(
@@ -193,6 +201,35 @@ public class ReceiptParserService {
                 continue;
             }
 
+            if (index + 1 < lines.size()) {
+                Optional<QuantityPrice> quantityPrice = parseStandaloneQuantityPrice(line);
+                if (quantityPrice.isPresent()) {
+                    String followingLine = lineAnalyzer.clean(lines.get(index + 1));
+                    Optional<ParsedItemLine> followingItem = parseItemLineWithMoney(followingLine);
+                    if (followingItem.isPresent()
+                            && lineAnalyzer.isLikelyProduct(followingItem.get().description(), lineAnalyzer.normalize(followingLine))) {
+                        double quantity = amounts.parseQuantity(quantityPrice.get().quantity()).orElse(1.0);
+                        double unitPrice = amounts.parse(quantityPrice.get().unitPrice());
+                        double total = amounts.parse(followingItem.get().price());
+                        if (quantity > 0 && amounts.isConsistent(unitPrice, quantity, total)) {
+                            items.add(buildItem(
+                                    followingItem.get().description(),
+                                    followingItem.get().price(),
+                                    storeName,
+                                    date,
+                                    lineAnalyzer.isAmbiguous(followingLine, lineAnalyzer.normalize(followingLine)),
+                                    followingLine,
+                                    warnings,
+                                    quantityPrice.get().quantity(),
+                                    false
+                            ));
+                            index++;
+                            continue;
+                        }
+                    }
+                }
+            }
+
             if (lineAnalyzer.shouldSkip(normalized)) {
                 if (lineAnalyzer.isPriceOnly(line)) {
                     warnings.add("Precio sin descripción: " + line);
@@ -200,7 +237,9 @@ public class ReceiptParserService {
                 continue;
             }
 
-            if (lineAnalyzer.isLikelyDescriptionOnly(line, normalized) && index + 1 < lines.size()) {
+            if (lineAnalyzer.isLikelyDescriptionOnly(line, normalized)
+                    && !lineAnalyzer.containsMoney(line)
+                    && index + 1 < lines.size()) {
                 String nextLine = lineAnalyzer.clean(lines.get(index + 1));
                 Matcher quantityPriceMatcher = QUANTITY_PRICE_PATTERN.matcher(nextLine);
                 if (!quantityPriceMatcher.matches()) {
@@ -488,6 +527,16 @@ public class ReceiptParserService {
         return Optional.of(new ParsedItemLine(description, prices.get(prices.size() - 1)));
     }
 
+    private Optional<QuantityPrice> parseStandaloneQuantityPrice(String line) {
+        Matcher matcher = QUANTITY_PRICE_PATTERN.matcher(line);
+        if (!matcher.matches()
+                || line.replace("x", "").replace("X", "").chars().anyMatch(Character::isLetter)
+                || !lineAnalyzer.isMoneyValue(matcher.group(2))) {
+            return Optional.empty();
+        }
+        return Optional.of(new QuantityPrice(matcher.group(1), matcher.group(2)));
+    }
+
     private int detectQuantity(String description) {
         Matcher trailingQuantity = Pattern.compile("(?i)(\\d+)\\s*[xX]\\s*$").matcher(description.trim());
         if (trailingQuantity.find()) {
@@ -680,6 +729,9 @@ public class ReceiptParserService {
     }
 
     private record ParsedItemLine(String description, String price) {
+    }
+
+    private record QuantityPrice(String quantity, String unitPrice) {
     }
 
 }

@@ -6,11 +6,16 @@ import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.rendering.ImageType;
 import org.apache.pdfbox.rendering.PDFRenderer;
+import com.opencode.facturas.model.OcrResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 
 class PdfPageRenderer {
+
+    private static final Logger log = LoggerFactory.getLogger(PdfPageRenderer.class);
 
     static final float DEFAULT_DPI = 300.0f;
     static final int DEFAULT_MAX_PAGES = 20;
@@ -38,6 +43,10 @@ class PdfPageRenderer {
     }
 
     void forEachPage(byte[] pdfBytes, PageProcessor processor) {
+        forEachPage(pdfBytes, false, (number, total, nativeText, image) -> processor.process(number, total, image));
+    }
+
+    void forEachPage(byte[] pdfBytes, boolean nativeTextEnabled, HybridPageProcessor processor) {
         try (PDDocument document = Loader.loadPDF(pdfBytes)) {
             int pageCount = document.getNumberOfPages();
             if (pageCount == 0) {
@@ -48,11 +57,24 @@ class PdfPageRenderer {
             }
 
             PDFRenderer renderer = new PDFRenderer(document);
+            PdfTextExtractor textExtractor = new PdfTextExtractor();
             for (int pageIndex = 0; pageIndex < pageCount; pageIndex++) {
                 validatePageDimensions(document.getPage(pageIndex));
+                if (nativeTextEnabled) {
+                    OcrResult nativeText = null;
+                    try {
+                        nativeText = textExtractor.extractPage(document, pageIndex).orElse(null);
+                    } catch (IOException | RuntimeException ex) {
+                        log.debug("No se pudo extraer texto nativo de página PDF {}; se usará OCR.", pageIndex + 1);
+                    }
+                    if (nativeText != null) {
+                        processor.process(pageIndex + 1, pageCount, nativeText, null);
+                        continue;
+                    }
+                }
                 BufferedImage image = renderer.renderImageWithDPI(pageIndex, dpi, ImageType.RGB);
                 try {
-                    processor.process(pageIndex + 1, pageCount, image);
+                    processor.process(pageIndex + 1, pageCount, null, image);
                 } finally {
                     image.flush();
                 }
@@ -84,5 +106,10 @@ class PdfPageRenderer {
     @FunctionalInterface
     interface PageProcessor {
         void process(int pageNumber, int pageCount, BufferedImage image);
+    }
+
+    @FunctionalInterface
+    interface HybridPageProcessor {
+        void process(int pageNumber, int pageCount, OcrResult nativeText, BufferedImage image);
     }
 }

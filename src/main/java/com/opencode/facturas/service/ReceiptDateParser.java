@@ -8,8 +8,23 @@ import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Optional;
 import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 final class ReceiptDateParser {
+
+    private static final List<List<String>> MONTH_NAMES = List.of(
+            List.of("ene", "enero"), List.of("feb", "febrero"), List.of("mar", "marzo"),
+            List.of("abr", "abril"), List.of("may", "mayo"), List.of("jun", "junio"),
+            List.of("jul", "julio"), List.of("ago", "agosto"),
+            List.of("sep", "sept", "set", "septiembre", "setiembre"),
+            List.of("oct", "octubre"), List.of("nov", "noviembre"), List.of("dic", "diciembre"));
+    private static final Pattern TEXT_DATE_PATTERN = Pattern.compile(
+            "(?<![a-z0-9])([0-9o]{1,2})\\s+(?:de\\s+)?("
+                    + MONTH_NAMES.stream().flatMap(List::stream).collect(java.util.stream.Collectors.joining("|"))
+                    + ")(?![a-z])(?:\\s+(?:de\\s+)?(\\d{4})(?!\\d))?");
+    private static final Pattern DELIVERY_LABEL = Pattern.compile("\\bentregad[oa]\\b");
+    private static final Pattern EXCLUDED_DATE_LABEL = Pattern.compile(
+            "\\b(?:inicio|actividad|venc\\w*|vto|caduc\\w*|elabor\\w*|fabric\\w*|cuit)\\b");
 
     private final ReceiptLineAnalyzer lineAnalyzer;
     private final Clock clock;
@@ -60,12 +75,38 @@ final class ReceiptDateParser {
             }
         }
 
+        // PedidosYa shows a delivery status rather than a 'Fecha' label. OCR
+        // may split the small header into separate rows, even between day/month.
+        for (int index = 0; index < lines.size(); index++) {
+            String normalized = lineAnalyzer.normalize(lines.get(index));
+            if (!DELIVERY_LABEL.matcher(normalized).find() || isExcludedDateLine(normalized)) {
+                continue;
+            }
+            for (int count = 1; count <= 3 && index + count <= lines.size(); count++) {
+                String header = String.join(" ", lines.subList(index, index + count));
+                if (isExcludedDateLine(lineAnalyzer.normalize(header))) {
+                    break;
+                }
+                Optional<String> date = findDateInLine(header);
+                if (date.isPresent()) {
+                    return date;
+                }
+            }
+        }
+
         for (String line : lines) {
             if (isUnlabeledReceiptDateLine(line)) {
                 Optional<String> date = findDateInLine(line);
                 if (date.isPresent()) {
                     return date;
                 }
+            }
+        }
+
+        for (String line : lines) {
+            Optional<String> date = findTextDate(line, true);
+            if (date.isPresent()) {
+                return date;
             }
         }
 
@@ -98,7 +139,42 @@ final class ReceiptDateParser {
         if (!normalizedLine.contains("fecha")) {
             return false;
         }
-        return !normalizedLine.contains("inicio") && !normalizedLine.contains("actividad");
+        return !isExcludedDateLine(normalizedLine);
+    }
+
+    private boolean isExcludedDateLine(String normalizedLine) {
+        return EXCLUDED_DATE_LABEL.matcher(normalizedLine).find();
+    }
+
+    private Optional<String> findTextDate(String line, boolean standalone) {
+        String normalized = lineAnalyzer.normalize(line);
+        if (isExcludedDateLine(normalized)) {
+            return Optional.empty();
+        }
+        Matcher matcher = TEXT_DATE_PATTERN.matcher(normalized);
+        while (matcher.find()) {
+            if (standalone) {
+                String remainder = normalized.substring(0, matcher.start()) + " " + normalized.substring(matcher.end());
+                remainder = remainder.replaceAll("\\b(?:lun(?:es)?|mar(?:tes)?|mie(?:rcoles)?|jue(?:ves)?|vie(?:rnes)?|sab(?:ado)?|dom(?:ingo)?|hs|h)\\b", " ")
+                        .replaceAll("\\b\\d{1,2}\\s+\\d{2}(?:\\s+\\d{2})?\\b", " ").trim();
+                if (!remainder.isBlank()) {
+                    continue;
+                }
+            }
+            int month = 0;
+            for (int index = 0; index < MONTH_NAMES.size(); index++) {
+                if (MONTH_NAMES.get(index).contains(matcher.group(2))) {
+                    month = index + 1;
+                    break;
+                }
+            }
+            String rawDate = matcher.group(1).replace('o', '0') + "/" + month
+                    + (matcher.group(3) == null ? "" : "/" + matcher.group(3));
+            if (isLikelyReceiptDate(rawDate)) {
+                return Optional.of(rawDate);
+            }
+        }
+        return Optional.empty();
     }
 
     private Optional<String> findDateInLine(String line) {
@@ -109,7 +185,7 @@ final class ReceiptDateParser {
                 return Optional.of(date);
             }
         }
-        return Optional.empty();
+        return findTextDate(line, false);
     }
 
     private String normalizeSeparators(String value) {

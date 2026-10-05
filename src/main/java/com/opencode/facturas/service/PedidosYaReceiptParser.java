@@ -95,6 +95,9 @@ final class PedidosYaReceiptParser {
     }
 
     private boolean isLikelyProductLine(String line, String normalized) {
+        if (isInterfaceLine(normalized)) {
+            return false;
+        }
         if (line.length() < 5 || lineAnalyzer.containsMetadata(normalized) || lineAnalyzer.isSummary(normalized)) {
             return false;
         }
@@ -117,7 +120,7 @@ final class PedidosYaReceiptParser {
     }
 
     private Optional<InlineItem> parseInlineItem(String line, String normalized) {
-        if (lineAnalyzer.containsMetadata(normalized)
+        if (isInterfaceLine(normalized) || lineAnalyzer.containsMetadata(normalized)
                 || normalized.contains("off")
                 || normalized.contains("market")
                 || lineAnalyzer.isSummary(normalized)
@@ -152,6 +155,10 @@ final class PedidosYaReceiptParser {
             return Optional.empty();
         }
         return Optional.of(new InlineItem(description, prices.get(0), quantity));
+    }
+
+    private boolean isInterfaceLine(String normalized) {
+        return normalized.matches("^(?:entregad[oa]\\b.*|compensacion\\b.*|te acreditamos\\b.*|repetir pedido\\b.*|ir al local|ayuda|ver menos|ver mas|notas adicionales\\b.*)$");
     }
 
     private Optional<String> findPriceInFollowingLines(List<String> lines, int startIndex) {

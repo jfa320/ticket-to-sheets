@@ -12,8 +12,14 @@ public record OcrResult(
         List<OcrDetection> detections,
         String variant,
         Double score,
-        List<OcrResult> pages
+        List<OcrResult> pages,
+        OcrPreview preview
 ) {
+    public OcrResult(String text, List<OcrLine> lines, List<OcrDetection> detections,
+                     String variant, Double score, List<OcrResult> pages) {
+        this(text, lines, detections, variant, score, pages, null);
+    }
+
     public OcrResult(
             String text,
             List<OcrLine> lines,

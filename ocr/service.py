@@ -1,4 +1,5 @@
 import json
+import hashlib
 from io import BytesIO
 import glob
 import logging
@@ -19,14 +20,18 @@ os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 
 from flask import Flask, jsonify, request
-import numpy as np
 import paddle
 from paddleocr import PaddleOCR
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageDraw, ImageOps
 
+from image_variants import build_variants
+from ocr_regions import recognize_regions
 from receipt_layout import merge_boxes_into_rows
-from preprocess import remove_physical_lines
 from scoring import score_lines
+from targeted_retry import refine_detections
+from variant_fusion import fuse_detections
+from preview import build_preview
+from model_paths import model_path_options
 
 try:
     paddle.set_flags({"FLAGS_use_mkldnn": False})
@@ -43,12 +48,27 @@ app = Flask(__name__)
 OCR_CACHE = {}
 OCR_LOCK = threading.Lock()
 DEFAULT_LANGUAGE = os.environ.get("OCR_DEFAULT_LANGUAGE", "es")
+OCR_MAX_REGION_SIDE = 1400
 logging.basicConfig(level=logging.INFO)
 
 
 def debug_enabled():
     value = os.environ.get("APP_OCR_DEBUG", os.environ.get("OCR_DEBUG", "false"))
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def image_corrections_enabled():
+    value = os.environ.get("OCR_IMAGE_CORRECTIONS", "true")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def targeted_retry_enabled():
+    value = os.environ.get("OCR_TARGETED_RETRY", "true")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def variant_fusion_enabled():
+    return os.environ.get("OCR_VARIANT_FUSION", "true").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def create_debug_dir():
@@ -81,6 +101,7 @@ def get_ocr(language):
     with OCR_LOCK:
         if language not in OCR_CACHE:
             app.logger.info("Loading PaddleOCR model for language '%s'", language)
+            model_options = model_path_options(language)
             try:
                 OCR_CACHE[language] = PaddleOCR(
                     use_angle_cls=False,
@@ -90,6 +111,8 @@ def get_ocr(language):
                     use_mkldnn=False,
                     ir_optim=False,
                     cpu_threads=1,
+                    det_limit_side_len=OCR_MAX_REGION_SIDE,
+                    **model_options,
                 )
             except Exception:
                 purge_corrupted_paddle_cache()
@@ -101,6 +124,8 @@ def get_ocr(language):
                     use_mkldnn=False,
                     ir_optim=False,
                     cpu_threads=1,
+                    det_limit_side_len=OCR_MAX_REGION_SIDE,
+                    **model_options,
                 )
             app.logger.info("PaddleOCR model for language '%s' loaded", language)
     return OCR_CACHE[language]
@@ -222,96 +247,29 @@ def draw_overlay(image, detections):
     return overlay
 
 
-def crop_receipt_region(image):
-    gray = ImageOps.grayscale(image)
-    gray = ImageOps.autocontrast(gray)
-    array = np.array(gray)
-
-    mask = array > 165
-    row_hits = np.where(mask.mean(axis=1) > 0.45)[0]
-    col_hits = np.where(mask.mean(axis=0) > 0.45)[0]
-
-    if len(row_hits) < 40 or len(col_hits) < 40:
-        return image
-
-    top = max(int(row_hits[0]) - 25, 0)
-    bottom = min(int(row_hits[-1]) + 25, image.height)
-    left = max(int(col_hits[0]) - 25, 0)
-    right = min(int(col_hits[-1]) + 25, image.width)
-
-    if right - left < image.width * 0.22 or bottom - top < image.height * 0.35:
-        return image
-
-    return image.crop((left, top, right, bottom))
-
-
-def build_variants(image, debug_dir=None):
-    variants = []
-    source = image.convert("RGB")
-
-    for rotation in (0, 90, 270, 180):
-        oriented = source if rotation == 0 else source.rotate(rotation, expand=True)
-        base = crop_receipt_region(oriented)
-        base = limit_image_size(base, 1400)
-        suffix = "original" if rotation == 0 else f"rot{rotation}"
-
-        variants.append((f"cropped-{suffix}", base))
-
-        gray = ImageOps.grayscale(base)
-        variants.append((f"gray-{suffix}", gray))
-
-        without_lines = remove_physical_lines(gray)
-        if without_lines is not None:
-            cleaned, line_mask = without_lines
-            variants.append((f"without-lines-{suffix}", cleaned))
-            save_debug_image(debug_dir, f"variants/without-lines-{suffix}-mask.png", line_mask)
-
-        contrast = ImageEnhance.Contrast(gray).enhance(2.3)
-        sharp = ImageEnhance.Sharpness(contrast).enhance(2.0)
-        enlarged = limit_image_size(sharp.resize((sharp.width * 2, sharp.height * 2), Image.Resampling.LANCZOS), 1800)
-        variants.append((f"enhanced-{suffix}", enlarged))
-
-        threshold = enlarged.point(lambda pixel: 255 if pixel > 172 else 0, mode="1").convert("L")
-        variants.append((f"threshold-{suffix}", threshold))
-
-        denoised = enlarged.filter(ImageFilter.MedianFilter(size=3))
-        variants.append((f"denoised-{suffix}", denoised))
-
-        light_threshold = denoised.point(lambda pixel: 255 if pixel > 150 else 0, mode="1").convert("L")
-        variants.append((f"light-threshold-{suffix}", light_threshold))
-
-        small = limit_image_size(base, 900)
-        variants.append((f"small-{suffix}", small))
-        variants.append((f"small-gray-{suffix}", ImageOps.grayscale(small)))
-
-    return variants
-
-
-def limit_image_size(image, max_side=2200):
-    largest_side = max(image.width, image.height)
-    if largest_side <= max_side:
-        return image
-
-    scale = max_side / largest_side
-    new_size = (max(1, int(image.width * scale)), max(1, int(image.height * scale)))
-    return image.resize(new_size, Image.Resampling.LANCZOS)
-
-
-def ocr_image(ocr, image):
+def recognize_block(ocr, image):
     temp_path = None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as temp_file:
             image.save(temp_file, format="PNG")
             temp_path = temp_file.name
         result = ocr.ocr(temp_path, cls=False)
-        detections = extract_detections(result)
-        return detections, merge_boxes_into_rows(detections)
+        return extract_detections(result)
     finally:
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
 
 
-def run_best_ocr(image, language, debug_dir=None):
+def ocr_image(ocr, image):
+    detections = recognize_regions(
+        image,
+        lambda region: recognize_block(ocr, region),
+        max_side=OCR_MAX_REGION_SIDE,
+    )
+    return detections, merge_boxes_into_rows(detections)
+
+
+def run_best_ocr(image, language, debug_dir=None, preview_sink=None):
     ocr = get_ocr(language)
     best_name = "original"
     best_lines = []
@@ -319,8 +277,15 @@ def run_best_ocr(image, language, debug_dir=None):
     best_variant = None
     best_score = -1
     variant_summaries = []
+    evidence = []
+    best_metadata = None
+    fusion_enabled = variant_fusion_enabled()
 
-    for name, variant in build_variants(image, debug_dir):
+    for entry in build_variants(
+        image, debug_dir, save_debug_image, document_corrections=image_corrections_enabled(), with_metadata=True
+    ):
+        name, variant = entry[:2]
+        metadata = dict(entry[2]) if len(entry) > 2 else None
         save_debug_image(debug_dir, f"variants/{name}.png", variant)
         try:
             detections, lines = ocr_image(ocr, variant)
@@ -329,6 +294,10 @@ def run_best_ocr(image, language, debug_dir=None):
             variant_summaries.append({"variant": name, "error": str(exc)})
             continue
         score = score_lines(lines)
+        if fusion_enabled and metadata:
+            digest = hashlib.sha256(variant.convert("L").tobytes()).hexdigest()
+            metadata["fingerprint"] = (variant.size, digest)
+            evidence.append({"metadata": metadata, "detections": detections})
         variant_summaries.append({
             "variant": name,
             "score": score,
@@ -348,9 +317,48 @@ def run_best_ocr(image, language, debug_dir=None):
             best_detections = detections
             best_name = name
             best_variant = variant
+            best_metadata = metadata
 
     if best_score < 0:
         raise RuntimeError("PaddleOCR fallo en todas las variantes de imagen. Revisa tamaño/formato de la foto.")
+
+    fusion_summary = {"enabled": fusion_enabled}
+    if fusion_enabled:
+        try:
+            fused, statistics = fuse_detections(best_detections, best_metadata, evidence)
+            fusion_summary.update(statistics)
+            if statistics["acceptedRegions"]:
+                fused_lines = merge_boxes_into_rows(fused)
+                fused_score = score_lines(fused_lines)
+                best_detections, best_lines, best_score = fused, fused_lines, fused_score
+                best_name += "+fusion"
+        except Exception:
+            fusion_summary["error"] = "variant_fusion_failed"
+            app.logger.warning("Variant fusion failed; keeping the selected reading")
+
+    retry_summary = {"enabled": targeted_retry_enabled()}
+    if retry_summary["enabled"] and best_variant is not None:
+        try:
+            refined, statistics = refine_detections(
+                best_variant, best_detections, lambda region: recognize_block(ocr, region)
+            )
+            retry_summary.update(statistics)
+            if statistics["acceptedRegions"]:
+                # Keep boxes in the selected variant's coordinate system.
+                # Rebuild every derived field before serializing/debugging.
+                refined_lines = merge_boxes_into_rows(refined)
+                refined_score = score_lines(refined_lines)
+                best_detections = refined
+                best_lines = refined_lines
+                best_score = refined_score
+                best_name += "+retry"
+            if statistics["attemptedRegions"]:
+                app.logger.info("Targeted OCR reread: %d regions, %d accepted, %d calls, %d failed calls",
+                                statistics["attemptedRegions"], statistics["acceptedRegions"],
+                                statistics["ocrCalls"], statistics["failedCalls"])
+        except Exception:
+            retry_summary["error"] = "targeted_retry_failed"
+            app.logger.warning("Targeted OCR reread failed; keeping the selected variant result")
 
     preview = " | ".join(line["text"] for line in best_lines[:12])
     app.logger.info("Selected OCR variant '%s' with score %.2f and %d lines: %s", best_name, best_score, len(best_lines), preview)
@@ -360,6 +368,8 @@ def run_best_ocr(image, language, debug_dir=None):
             save_debug_image(debug_dir, "selected.png", best_variant)
             save_debug_image(debug_dir, "detections-overlay.png", draw_overlay(best_variant, best_detections))
         write_debug_json(debug_dir, "variants-summary.json", variant_summaries)
+        write_debug_json(debug_dir, "targeted-retry.json", retry_summary)
+        write_debug_json(debug_dir, "variant-fusion.json", fusion_summary)
         write_debug_json(debug_dir, "detections.json", {
             "variant": best_name,
             "score": best_score,
@@ -367,6 +377,11 @@ def run_best_ocr(image, language, debug_dir=None):
             "lines": best_lines,
         })
 
+    if preview_sink is not None and best_variant is not None:
+        try:
+            preview_sink.update(build_preview(best_variant))
+        except Exception:
+            app.logger.warning("Could not generate OCR preview; text remains available")
     return best_name, best_lines, best_detections, best_score
 
 
@@ -378,10 +393,12 @@ def ocr_endpoint():
     language = request.headers.get("X-OCR-Language", "es")
 
     try:
-        image = Image.open(BytesIO(request.data)).convert("RGB")
+        with Image.open(BytesIO(request.data)) as uploaded:
+            image = ImageOps.exif_transpose(uploaded).convert("RGB")
         debug_dir = create_debug_dir()
         save_debug_image(debug_dir, "original.png", image)
-        variant_name, lines, detections, score = run_best_ocr(image, language, debug_dir)
+        preview = {}
+        variant_name, lines, detections, score = run_best_ocr(image, language, debug_dir, preview_sink=preview)
         text = "\n".join(line["text"] for line in lines)
         response = {
             "text": text,
@@ -389,6 +406,7 @@ def ocr_endpoint():
             "detections": detections,
             "variant": variant_name,
             "score": score,
+            "preview": preview or None,
         }
         if debug_dir:
             response["debugDir"] = debug_dir

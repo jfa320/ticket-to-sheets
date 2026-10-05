@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.facturas.model.OcrDetection;
 import com.opencode.facturas.model.OcrLine;
 import com.opencode.facturas.model.OcrResult;
+import com.opencode.facturas.model.OcrPreview;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -33,7 +34,8 @@ class OcrResultMapper {
                 parseDetections(root.path("detections")),
                 variant,
                 score,
-                parsePages(root.path("pages"))
+                parsePages(root.path("pages")),
+                parsePreview(root.path("preview"))
         );
     }
 
@@ -50,7 +52,9 @@ class OcrResultMapper {
                     parseLines(page.path("lines")),
                     parseDetections(page.path("detections")),
                     page.path("variant").asText(null),
-                    page.path("score").isNumber() ? page.path("score").asDouble() : null
+                    page.path("score").isNumber() ? page.path("score").asDouble() : null,
+                    List.of(),
+                    parsePreview(page.path("preview"))
             ));
         }
         return pages;
@@ -117,5 +121,27 @@ class OcrResultMapper {
 
     private Double optionalDouble(JsonNode node) {
         return node.isNumber() ? node.asDouble() : null;
+    }
+
+    private OcrPreview parsePreview(JsonNode node) {
+        String data = node.path("imageDataUrl").asText("");
+        int width = node.path("width").asInt(0);
+        int height = node.path("height").asInt(0);
+        // Previews are optional. Reject remote URLs and unbounded payloads while
+        // preserving successful text extraction from older OCR services.
+        if (width < 1 || height < 1 || (long) width * height > 4_000_000L
+                || data.length() > 1_500_000 || !data.startsWith("data:image/jpeg;base64,")) {
+            return null;
+        }
+        try {
+            byte[] decoded = java.util.Base64.getDecoder().decode(data.substring("data:image/jpeg;base64,".length()));
+            if (decoded.length < 3 || (decoded[0] & 0xff) != 0xff
+                    || (decoded[1] & 0xff) != 0xd8 || (decoded[2] & 0xff) != 0xff) {
+                return null;
+            }
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
+        return new OcrPreview(data, width, height);
     }
 }

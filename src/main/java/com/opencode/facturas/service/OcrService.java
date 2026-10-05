@@ -15,10 +15,7 @@ import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
 import javax.imageio.stream.ImageInputStream;
 import java.awt.*;
-import java.awt.color.ColorSpace;
 import java.awt.image.BufferedImage;
-import java.awt.image.ColorConvertOp;
-import java.awt.image.RescaleOp;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.util.Iterator;
@@ -40,6 +37,7 @@ public class OcrService {
     private final PdfPageRenderer pdfPageRenderer;
     private final long maxImagePixels;
     private final int maxImageSide;
+    private final boolean nativePdfTextEnabled;
 
     @Autowired
     public OcrService(
@@ -53,7 +51,8 @@ public class OcrService {
             @Value("${app.upload.max-image-pixels:20000000}") long maxImagePixels,
             @Value("${app.upload.max-image-side:10000}") int maxImageSide,
             @Value("${app.pdf.max-pages:20}") int maxPdfPages,
-            @Value("${app.pdf.max-page-pixels:20000000}") long maxPdfPagePixels
+            @Value("${app.pdf.max-page-pixels:20000000}") long maxPdfPagePixels,
+            @Value("${app.pdf.native-text-enabled:true}") boolean nativePdfTextEnabled
     ) {
         this(
                 new OcrResultMapper(objectMapper),
@@ -68,7 +67,8 @@ public class OcrService {
                 ),
                 new PdfPageRenderer(PdfPageRenderer.DEFAULT_DPI, maxPdfPages, maxPdfPagePixels),
                 maxImagePixels,
-                maxImageSide
+                maxImageSide,
+                nativePdfTextEnabled
         );
     }
 
@@ -78,6 +78,11 @@ public class OcrService {
 
     OcrService(OcrResultMapper resultMapper, OcrApiClient apiClient, PdfPageRenderer pdfPageRenderer,
                long maxImagePixels, int maxImageSide) {
+        this(resultMapper, apiClient, pdfPageRenderer, maxImagePixels, maxImageSide, true);
+    }
+
+    OcrService(OcrResultMapper resultMapper, OcrApiClient apiClient, PdfPageRenderer pdfPageRenderer,
+               long maxImagePixels, int maxImageSide, boolean nativePdfTextEnabled) {
         if (maxImagePixels < 1 || maxImageSide < 1) {
             throw new IllegalArgumentException("Los límites de imagen deben ser positivos.");
         }
@@ -86,6 +91,7 @@ public class OcrService {
         this.pdfPageRenderer = pdfPageRenderer;
         this.maxImagePixels = maxImagePixels;
         this.maxImageSide = maxImageSide;
+        this.nativePdfTextEnabled = nativePdfTextEnabled;
     }
 
     public String extractText(MultipartFile file) {
@@ -132,18 +138,23 @@ public class OcrService {
     }
 
     private OcrResult extractFromPdf(byte[] bytes) {
-        log.info("Renderizando PDF para OCR: {} bytes", bytes.length);
+        log.info("Procesando páginas PDF: {} bytes, texto nativo={}", bytes.length, nativePdfTextEnabled);
         List<OcrResult> pages = new ArrayList<>();
-        pdfPageRenderer.forEachPage(bytes, (pageNumber, pageCount, image) -> {
-            log.info("Enviando página PDF {}/{} a OCR: {}x{} px", pageNumber, pageCount, image.getWidth(), image.getHeight());
-            pages.add(processImage(image));
+        pdfPageRenderer.forEachPage(bytes, nativePdfTextEnabled, (pageNumber, pageCount, nativeText, image) -> {
+            if (nativeText != null) {
+                log.info("Texto nativo de página PDF {}/{}: {} caracteres", pageNumber, pageCount, textLength(nativeText));
+                pages.add(nativeText);
+            } else {
+                log.info("Enviando página PDF {}/{} a OCR: {}x{} px", pageNumber, pageCount, image.getWidth(), image.getHeight());
+                pages.add(processImage(image));
+            }
         });
         log.info("PDF renderizado y procesado: {} páginas", pages.size());
         return mergePageResults(pages);
     }
 
     private OcrResult processImage(BufferedImage source) {
-        BufferedImage prepared = preprocess(source);
+        BufferedImage prepared = prepareImage(source);
         try {
             return runPaddle(prepared);
         } finally {
@@ -262,22 +273,14 @@ public class OcrService {
         return new OcrResult(String.join("\n\n", texts), lines, detections, String.join(";", variants), averageScore, pages);
     }
 
-    private BufferedImage preprocess(BufferedImage source) {
-        BufferedImage gray = new BufferedImage(source.getWidth(), source.getHeight(), BufferedImage.TYPE_BYTE_GRAY);
-        BufferedImage contrasted = new BufferedImage(gray.getWidth(), gray.getHeight(), BufferedImage.TYPE_BYTE_GRAY);
-        BufferedImage padded = new BufferedImage(contrasted.getWidth() + 32, contrasted.getHeight() + 32, BufferedImage.TYPE_BYTE_GRAY);
+    private BufferedImage prepareImage(BufferedImage source) {
+        BufferedImage padded = new BufferedImage(source.getWidth() + 32, source.getHeight() + 32, BufferedImage.TYPE_INT_RGB);
         try {
-            ColorConvertOp colorConvert = new ColorConvertOp(ColorSpace.getInstance(ColorSpace.CS_GRAY), null);
-            colorConvert.filter(source, gray);
-
-            RescaleOp rescaleOp = new RescaleOp(1.28f, 14f, null);
-            rescaleOp.filter(gray, contrasted);
-
             Graphics2D graphics = padded.createGraphics();
             try {
                 graphics.setColor(Color.WHITE);
                 graphics.fillRect(0, 0, padded.getWidth(), padded.getHeight());
-                graphics.drawImage(contrasted, 16, 16, null);
+                graphics.drawImage(source, 16, 16, null);
             } finally {
                 graphics.dispose();
             }
@@ -285,9 +288,6 @@ public class OcrService {
         } catch (RuntimeException ex) {
             padded.flush();
             throw ex;
-        } finally {
-            gray.flush();
-            contrasted.flush();
         }
     }
 }

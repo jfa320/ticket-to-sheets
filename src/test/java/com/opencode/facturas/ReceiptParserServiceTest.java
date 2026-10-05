@@ -324,6 +324,30 @@ class ReceiptParserServiceTest {
     }
 
     @Test
+    void associatesQuantityPriceLineBeforeProductWithItsTotal() {
+        ExtractResponse response = parserService.parse("""
+                Los Tres Corazones
+                Fecha 04/10/2026
+                PRODUCTO UNO 1600,00
+                2 X 1400,00
+                ATUN EN LATA 2800,00
+                PRODUCTO TRES 1600,00
+                2 X 3000,00
+                NOQUIS LA SALTENA 450GR 6000,00
+                TOTAL 12000,00
+                """);
+
+        assertEquals(4, response.itemCount(), response.csv());
+        assertEquals("1", response.items().get(0).cantidad(), response.csv());
+        assertEquals("2", response.items().get(1).cantidad());
+        assertEquals("1400,00", response.items().get(1).precioUnitario());
+        assertEquals("1", response.items().get(2).cantidad());
+        assertEquals("2", response.items().get(3).cantidad());
+        assertEquals("3000,00", response.items().get(3).precioUnitario());
+        assertEquals("12000,00", response.total());
+    }
+
+    @Test
     void parseInlineHardwarePricesAndIgnoreTaxAndNetTotals() {
         ExtractResponse response = parserService.parse("""
                 Ferreteria Tribulato
@@ -465,6 +489,52 @@ class ReceiptParserServiceTest {
         assertTrue(response.csv().contains("Harina 000 1|Morixe|PedidosYa Market - San Miguel II|Supermercado|1|999,00|"), response.csv());
         assertTrue(response.csv().contains("Leche 3 1|Tregar|PedidosYa Market - San Miguel II|Supermercado|2|1552,85|"), response.csv());
         assertTrue(response.csv().contains("Queso rallado 150|La Paulina|PedidosYa Market - San Miguel II|Supermercado|1|5082,15|"), response.csv());
+    }
+
+    @Test
+    void parsesMarketDeliveryHeaderWithoutTurningCompensationIntoAnItem() {
+        ExtractResponse response = parserService.parse("""
+                Entregado mié 30 de sept · 22:04 hs
+                PedidosYa Market - San Miguel II
+                Ir al local
+                Repetir pedido
+                Compensación
+                $ 1.500
+                Te acreditamos un cupón por el problema con tu pedido.
+                Tu pedido
+                Bocaditos De Pollo Patitas Sabor Original 400 Grs 1x
+                $ 4.577,50 $ 9.155
+                50% OFF
+                Milanesa De Soja Lucchetti 290 g 2x
+                $ 6.403,50 $ 8.538
+                25% OFF
+                Queso Crema La Paulina Tradicional 290 g 1x
+                $ 2.979,25 $ 3.505
+                15% OFF
+                Leche Tregar Entera 3% Larga Vida 1 L 3x
+                $ 5.100 $ 7.650
+                3x2
+                Hamburguesa De Carne Union Ganadera (332 g) 4 Unidades 1x
+                $ 8.298,75 $ 11.065
+                25% OFF
+                Papas Air Fryer Mc Cain Más Finitas 700 g 1x
+                $ 6.077,40 $ 10.129
+                40% OFF
+                Ver menos
+                Tu pago
+                Medios de pago
+                Detalles sobre la entrega
+                """);
+        String expectedDate = "30/9/" + java.time.LocalDate.now().getYear();
+        assertEquals(expectedDate, response.date());
+        assertEquals(6, response.itemCount(), response.csv());
+        assertEquals("33436,40", response.total());
+        assertEquals("2", response.items().get(1).cantidad());
+        assertEquals("3201,75", response.items().get(1).precioUnitario());
+        assertEquals("3", response.items().get(3).cantidad());
+        assertEquals("1700,00", response.items().get(3).precioUnitario());
+        assertTrue(response.items().stream().allMatch(item -> expectedDate.equals(item.fecha())));
+        assertTrue(response.tsvWithoutHeader().lines().allMatch(line -> line.endsWith("\t" + expectedDate)));
     }
 
     @Test

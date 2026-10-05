@@ -4,23 +4,81 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Extractor de facturas</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/styles.css?v=8">
+    <link rel="stylesheet" href="/styles.css?v=14">
 </head>
 <body>
 <main class="shell">
     <section class="hero">
+        <button id="sheetsSettingsOpen" class="settings-open" type="button" aria-label="Configuración de Google Sheets" aria-haspopup="dialog" aria-controls="sheetsSettingsDialog" title="Configuración de Google Sheets">
+            <svg aria-hidden="true" width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.07-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.61-.22l-2.39.96a7.28 7.28 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.88 2h-3.76a.5.5 0 0 0-.49.42l-.36 2.54a7.28 7.28 0 0 0-1.63.94l-2.39-.96a.5.5 0 0 0-.61.22L2.72 8.48a.5.5 0 0 0 .12.64l2.03 1.58a7.93 7.93 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .61.22l2.39-.96c.5.39 1.04.7 1.63.94l.36 2.54a.5.5 0 0 0 .49.42h3.76a.5.5 0 0 0 .49-.42l.36-2.54c.59-.24 1.13-.55 1.63-.94l2.39.96a.5.5 0 0 0 .61-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58Z"/><circle cx="12" cy="12" r="3.5"/></svg>
+        </button>
         <p class="eyebrow">Carga simple de facturas</p>
-        <h1>Subí una factura y llevátela lista para pegar en Google Sheets.</h1>
-        <p class="lead">Subí una imagen o PDF, revisá los datos y copialos donde los necesites.</p>
+        <h1>Subí una factura y cargá sus productos en Google Sheets.</h1>
+        <p class="lead">Subí una imagen o PDF, revisá los datos y envialos a tu planilla con un botón.</p>
         <ol class="flow-steps" aria-label="Flujo de trabajo">
             <li class="flow-step flow-step-active">Cargar</li>
             <li class="flow-step">Revisar</li>
-            <li class="flow-step">Copiar</li>
+            <li class="flow-step">Cargar en Sheets</li>
         </ol>
     </section>
+
+    <dialog id="sheetsSettingsDialog" class="sheets-settings-dialog" aria-labelledby="sheetsConfigTitle">
+    <section class="panel sheets-config" aria-labelledby="sheetsConfigTitle">
+        <div class="output-header">
+            <div>
+                <h2 id="sheetsConfigTitle">Destino de Google Sheets</h2>
+                <span>Elegí la planilla, su año y cómo se asocia cada mes con las pestañas.</span>
+            </div>
+            <a id="sheetsDestinationLink" class="sheets-link hidden" target="_blank" rel="noopener noreferrer">Abrir planilla</a>
+        </div>
+        <form id="sheetsConfigForm" novalidate>
+            <fieldset id="sheetsConfigFields" class="sheets-fields">
+                <legend class="sr-only">Configuración del destino</legend>
+                <div class="sheets-field sheets-file-field">
+                    <label for="sheetsSpreadsheet">Enlace o ID de la planilla</label>
+                    <input id="sheetsSpreadsheet" type="text" autocomplete="off" placeholder="https://docs.google.com/spreadsheets/d/…" aria-describedby="sheetsSpreadsheetHint sheetsSpreadsheetError">
+                    <small id="sheetsSpreadsheetHint">Usá una planilla nativa de Google Sheets alojada en Drive.</small>
+                    <small id="sheetsSpreadsheetError" class="sheets-field-error"></small>
+                </div>
+                <div class="sheets-field">
+                    <label for="sheetsYear">Año de esta planilla</label>
+                    <input id="sheetsYear" type="number" inputmode="numeric" min="1900" max="9999" step="1" autocomplete="off" aria-describedby="sheetsYearError">
+                    <small id="sheetsYearError" class="sheets-field-error"></small>
+                </div>
+                <div class="sheets-field">
+                    <label for="sheetsHeaderRow">Fila de encabezados</label>
+                    <input id="sheetsHeaderRow" type="number" inputmode="numeric" min="1" max="1000" step="1" value="2" aria-describedby="sheetsHeaderHint sheetsHeaderRowError">
+                    <small id="sheetsHeaderHint">Tu modelo tiene los encabezados en la fila 2.</small>
+                    <small id="sheetsHeaderRowError" class="sheets-field-error"></small>
+                </div>
+            </fieldset>
+            <div class="sheets-config-actions">
+                <button id="sheetsSave" type="submit">Guardar configuración</button>
+                <button id="sheetsCheck" class="secondary-action" type="button" disabled>Comprobar conexión</button>
+                <button id="sheetsSettingsClose" class="link-button" type="button">Cerrar</button>
+            </div>
+        </form>
+        <p id="sheetsAccountStatus" class="sheets-help">Consultando la conexión…</p>
+        <p id="sheetsShareHint" class="sheets-help hidden">Compartí la planilla con permiso de Editor con <strong id="sheetsServiceAccount"></strong>.</p>
+        <p id="sheetsConfigStatus" class="sheets-feedback" role="status" aria-live="polite" aria-atomic="true"></p>
+        <fieldset class="sheets-month-mappings" id="sheetsMonthMappings" disabled aria-label="Asociación de pestañas por mes"></fieldset>
+        <p id="sheetsMonthHint" class="sheets-help">Si dejás “Detectar por nombre”, se propone una pestaña clara como Agosto. El destino se elige según la fecha del ticket y podés cambiarlo para cargar meses atrasados.</p>
+        <div id="sheetsHistoryPanel" class="sheets-history" aria-labelledby="sheetsHistoryTitle">
+            <h3 id="sheetsHistoryTitle">Mejorar detección con tu historial</h3>
+            <p class="sheets-help">Usá los productos de las pestañas compatibles de esta planilla para reconocer descripción, marca y categoría por comercio. El precio, la cantidad y la fecha se toman del ticket.</p>
+            <p class="sheets-help">Los cambios se aplican a las próximas extracciones.</p>
+            <div class="sheets-config-actions">
+                <button id="sheetsHistorySync" class="secondary-action" type="button" disabled aria-describedby="sheetsHistoryStatus">Actualizar historial</button>
+                <button id="sheetsHistoryRemove" class="link-button hidden" type="button" aria-describedby="sheetsHistoryStatus">Dejar de usar historial</button>
+            </div>
+            <p id="sheetsHistoryStatus" class="sheets-feedback" role="status" aria-live="polite" aria-atomic="true">Consultando el historial…</p>
+        </div>
+    </section>
+    </dialog>
 
     <section class="panel uploader">
         <form id="uploadForm" novalidate>
@@ -67,21 +125,70 @@
             </article>
         </div>
 
+        <div class="panel sheets-destination-picker" aria-labelledby="sheetsDestinationTitle">
+            <div>
+                <strong id="sheetsDestinationTitle">Destino de carga</strong>
+                <p id="sheetsDestinationStatus" class="sheets-help" role="status" aria-live="polite">Se propone según el mes del ticket.</p>
+            </div>
+            <label for="sheetsDestinationSelect">Cargar en</label>
+            <select id="sheetsDestinationSelect" disabled aria-describedby="sheetsDestinationStatus">
+                <option value="">Abrí Configuración para elegir una planilla</option>
+            </select>
+        </div>
+
         <div id="warningsPanel" class="panel warnings-panel hidden" role="region" aria-labelledby="warningsTitle" aria-live="polite">
             <div class="output-header">
                 <div>
                     <h2 id="warningsTitle" tabindex="-1">Advertencias para revisar</h2>
-                    <span>Algunas líneas necesitan una revisión antes de copiar.</span>
+                    <span>Algunas líneas necesitan una revisión antes de exportar.</span>
                 </div>
             </div>
             <ul id="warningsList"></ul>
         </div>
 
+        <details id="ocrReviewPanel" class="panel output-block ocr-review hidden">
+            <summary>
+                Revisar zonas dudosas en la imagen
+                <span id="ocrReviewCount" class="ocr-review-count"></span>
+            </summary>
+            <p id="ocrReviewHint" class="ocr-review-hint">Se muestran las zonas con confianza menor a 0,80 o sin confianza informada. Elegí una zona para comparar el texto con un recorte ampliado. La confianza es un indicador del motor, no una garantía de exactitud.</p>
+            <div class="ocr-review-controls">
+                <label class="ocr-page-picker" for="ocrReviewPage">Página
+                    <select id="ocrReviewPage" aria-describedby="ocrReviewPageStatus"></select>
+                </label>
+                <label class="ocr-show-all" for="ocrReviewShowAll">
+                    <input id="ocrReviewShowAll" type="checkbox"> Mostrar todas las zonas
+                </label>
+            </div>
+            <p id="ocrReviewPageStatus" class="ocr-review-hint" role="status" aria-live="polite"></p>
+            <div class="ocr-review-layout">
+                <div id="ocrReviewImageViewport" class="ocr-image-viewport hidden" tabindex="0" role="region" aria-label="Imagen procesada y zonas detectadas">
+                    <div id="ocrReviewImageStage" class="ocr-image-stage"></div>
+                </div>
+                <div class="ocr-review-sidebar">
+                    <p id="ocrReviewEmpty" class="ocr-review-hint hidden"></p>
+                    <ol id="ocrReviewDetections" class="ocr-detection-list" aria-label="Zonas para revisar"></ol>
+                    <div id="ocrReviewSelection" class="ocr-selection hidden" aria-live="polite">
+                        <h3>Zona seleccionada</h3>
+                        <p id="ocrReviewSelectedText" class="ocr-selected-text"></p>
+                        <p id="ocrReviewSelectedConfidence" class="ocr-review-hint"></p>
+                        <label class="ocr-page-picker" for="ocrReviewZoom">Ampliación
+                            <select id="ocrReviewZoom"><option value="2">2×</option><option value="4" selected>4×</option><option value="8">8×</option></select>
+                        </label>
+                        <div class="ocr-crop-viewport" tabindex="0" role="region" aria-label="Recorte ampliado desplazable">
+                            <canvas id="ocrReviewCrop" class="ocr-crop hidden" role="img" aria-label="Recorte ampliado de la zona seleccionada"></canvas>
+                        </div>
+                        <p id="ocrReviewCropStatus" class="ocr-review-hint"></p>
+                    </div>
+                </div>
+            </div>
+        </details>
+
         <div id="itemsEditor" class="panel editor-block">
             <div class="output-header">
                 <div>
                     <h2>2. Revisar filas detectadas</h2>
-                    <span>Revisá y corregí los datos antes de copiar. Descripción, marca y categoría se guardan cuando la marca original y la corregida son reconocidas.</span>
+                    <span>Revisá y corregí los datos antes de exportar. Descripción, marca y categoría se guardan cuando la marca original y la corregida son reconocidas.</span>
                 </div>
                 <button id="addItem" class="add-item-button" type="button">＋ Agregar línea</button>
             </div>
@@ -119,13 +226,15 @@
         <div class="panel actions" aria-labelledby="actionsTitle">
             <div class="output-header action-heading">
                 <div>
-                    <h2 id="actionsTitle">3. Copiar resultado</h2>
-                    <span>Elegí el formato según dónde lo vas a pegar.</span>
+                    <h2 id="actionsTitle">3. Cargar o copiar resultado</h2>
+                    <span>Se envían las filas seleccionadas con los cambios que hiciste en la tabla.</span>
                 </div>
             </div>
-            <button id="copyTsv" class="primary-action" type="button" disabled>Copiar tabla para Google Sheets</button>
+            <button id="sheetsAppend" class="primary-action" type="button" disabled aria-describedby="sheetsAppendStatus">Cargar en Google Sheets</button>
+            <button id="copyTsv" class="secondary-action" type="button" disabled>Copiar tabla para Google Sheets</button>
             <button id="copyPipe" class="secondary-action" type="button" disabled>Copiar texto con |</button>
             <p id="exportHint" class="export-hint"></p>
+            <p id="sheetsAppendStatus" class="export-hint sheets-append-feedback" role="status" aria-live="polite" aria-atomic="true"></p>
             <div id="copyToast" class="copy-toast" role="status" aria-live="polite"></div>
             <div id="undoToast" class="undo-toast hidden" role="status" aria-live="polite">
                 <span>Fila eliminada.</span>
@@ -161,6 +270,6 @@
     <div id="filePreviewContent" class="file-preview-content"></div>
 </dialog>
 
-<script type="module" src="/app.js?v=9"></script>
+<script type="module" src="/app.js?v=15"></script>
 </body>
 </html>

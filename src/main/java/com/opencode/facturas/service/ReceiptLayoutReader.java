@@ -23,6 +23,9 @@ final class ReceiptLayoutReader {
     private static final Pattern MULTIPLIER_BEFORE_PRICE_PATTERN = Pattern.compile(
             "(?i)(?:^|\\s)(\\d+(?:[\\.,]\\d{1,4})?)\\s*x\\s*\\$?\\s*\\d"
     );
+    private static final Pattern STANDALONE_MULTIPLIER_PRICE_PATTERN = Pattern.compile(
+            "(?i)^\\s*(\\d+(?:[\\.,]\\d{1,4})?)\\s*x\\s*\\$?\\s*(\\d+(?:[\\.,]\\d{3})*[\\.,]\\d{2})\\s*$"
+    );
 
     private final ReceiptLineAnalyzer lineAnalyzer;
     private final ReceiptAmounts amounts;
@@ -47,12 +50,7 @@ final class ReceiptLayoutReader {
                 rows = rowsFromLines(page.lines());
             }
 
-            for (Row row : rows) {
-                int lineIndex = lines.size();
-                lines.add(row.text());
-                row.candidate(lineAnalyzer, amounts).ifPresent(candidate ->
-                        candidatesByLine.put(lineIndex, List.of(candidate)));
-            }
+            appendRows(rows, lines, candidatesByLine);
         }
 
         if (lines.isEmpty() && result.text() != null) {
@@ -63,6 +61,50 @@ final class ReceiptLayoutReader {
         }
 
         return new Layout(lines, candidatesByLine);
+    }
+
+    private void appendRows(List<Row> rows, List<String> lines, Map<Integer, List<Candidate>> candidatesByLine) {
+        for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
+            Row row = rows.get(rowIndex);
+            Optional<QuantityPrice> quantityPrice = standaloneMultiplierPrice(row.text());
+            if (quantityPrice.isPresent() && rowIndex + 1 < rows.size()) {
+                Row followingRow = rows.get(rowIndex + 1);
+                Optional<Candidate> followingCandidate = followingRow.candidate(lineAnalyzer, amounts);
+                if (followingCandidate.isPresent() && !followingCandidate.get().priceIsUnit()) {
+                    Candidate candidate = followingCandidate.get();
+                    double quantity = amounts.parseQuantity(quantityPrice.get().quantity()).orElse(1.0);
+                    double unitPrice = amounts.parse(quantityPrice.get().unitPrice());
+                    double total = amounts.parse(candidate.rawPrice());
+                    if (quantity > 0 && amounts.isConsistent(unitPrice, quantity, total)) {
+                        int lineIndex = lines.size();
+                        lines.add(followingRow.text());
+                        candidatesByLine.put(lineIndex, List.of(new Candidate(
+                                candidate.description(),
+                                candidate.rawPrice(),
+                                amounts.formatQuantity(quantity),
+                                false,
+                                candidate.ambiguous(),
+                                candidate.sourceLine()
+                        )));
+                        rowIndex++;
+                        continue;
+                    }
+                }
+            }
+
+            int lineIndex = lines.size();
+            lines.add(row.text());
+            row.candidate(lineAnalyzer, amounts).ifPresent(candidate ->
+                    candidatesByLine.put(lineIndex, List.of(candidate)));
+        }
+    }
+
+    private static Optional<QuantityPrice> standaloneMultiplierPrice(String rowText) {
+        Matcher matcher = STANDALONE_MULTIPLIER_PRICE_PATTERN.matcher(rowText);
+        if (!matcher.matches()) {
+            return Optional.empty();
+        }
+        return Optional.of(new QuantityPrice(matcher.group(1), matcher.group(2)));
     }
 
     private List<Row> rowsFromLines(List<OcrLine> lines) {
@@ -150,6 +192,9 @@ final class ReceiptLayoutReader {
     private static Optional<String> multiplierQuantity(String rowText) {
         Matcher matcher = MULTIPLIER_BEFORE_PRICE_PATTERN.matcher(rowText);
         return matcher.find() ? Optional.of(matcher.group(1)) : Optional.empty();
+    }
+
+    private record QuantityPrice(String quantity, String unitPrice) {
     }
 
     record Layout(List<String> lines, Map<Integer, List<Candidate>> candidatesByLine) {
@@ -294,7 +339,7 @@ final class ReceiptLayoutReader {
             if (moneyBoxes.size() >= 2 && (explicitQuantity.isPresent() || quantityBox.isPresent())) {
                 double unitPrice = amounts.parse(firstMoney.value());
                 double lineTotal = amounts.parse(lastMoney.value());
-                if (isConsistent(unitPrice, quantity, lineTotal)) {
+                if (amounts.isConsistent(unitPrice, quantity, lineTotal)) {
                     rawPrice = firstMoney.value();
                     priceIsUnit = true;
                 } else {
@@ -319,11 +364,6 @@ final class ReceiptLayoutReader {
             return moneyBoxes.stream().anyMatch(money -> money.box() == box);
         }
 
-        private static boolean isConsistent(double unitPrice, double quantity, double total) {
-            double expected = unitPrice * quantity;
-            double tolerance = Math.max(0.05, Math.abs(total) * 0.03);
-            return Math.abs(expected - total) <= tolerance;
-        }
     }
 
     private record MoneyBox(Box box, String value) {

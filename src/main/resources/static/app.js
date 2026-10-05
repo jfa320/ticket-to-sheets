@@ -4,6 +4,8 @@ import {
 import {extractReceipt, saveCorrections, validateFile} from './receipt-api.mjs';
 import {createCorrectionSaver} from './receipt-corrections.mjs';
 import {renderItems, renderWarnings, markInvalidCells} from './receipt-view.mjs';
+import {createOcrReview} from './ocr-review.mjs';
+import {createSheetsPanel} from './receipt-sheets.mjs?v=2';
 
 const byId = id => document.getElementById(id);
 const form = byId('uploadForm');
@@ -28,6 +30,7 @@ const copyToast = byId('copyToast');
 const undoToast = byId('undoToast');
 const undoRemove = byId('undoRemove');
 const copyButtons = [byId('copyPipe'), byId('copyTsv')];
+const ocrReview = createOcrReview();
 let receipt = null;
 let correctionSaver = null;
 let output = buildExports([]);
@@ -37,21 +40,30 @@ let copyToastTimer = null;
 let undoTimer = null;
 let removedItem = null;
 let previewUrl = null;
+let sheetsBusy = false;
+const sheetsPanel = createSheetsPanel({
+    getItems: () => receipt?.items || [],
+    onBusy(busy) { sheetsBusy = busy; updateUploadControls(); },
+    onSuccess() { setActiveStep(2); }
+});
 
 function updateUploadControls() {
-    submitButton.disabled = loading || Boolean(validateFile(selectedFile));
-    viewFile.disabled = loading || !selectedFile;
+    const blocked = loading || sheetsBusy;
+    submitButton.disabled = blocked || Boolean(validateFile(selectedFile));
+    viewFile.disabled = blocked || !selectedFile;
     submitButton.textContent = loading ? 'Procesando…' : 'Extraer datos';
-    fileInput.disabled = loading;
+    fileInput.disabled = blocked;
     form.setAttribute('aria-busy', String(loading));
-    dropzone.setAttribute('aria-disabled', String(loading));
-    results.inert = loading;
+    dropzone.setAttribute('aria-disabled', String(blocked));
+    results.inert = blocked;
+    sheetsPanel.setProcessing(loading);
 }
 
 function selectFile(file) {
-    if (loading) return;
+    if (loading || sheetsBusy) return;
     const error = validateFile(file);
     selectedFile = error ? null : file;
+    ocrReview.clear();
     status.textContent = error || `Archivo listo: ${file.name}`;
     fileSummary.classList.toggle('hidden', Boolean(error));
     fileName.textContent = error ? '' : file.name;
@@ -90,15 +102,15 @@ filePreviewDialog.addEventListener('click', event => {
 });
 
 replaceFile.addEventListener('click', () => {
-    if (!loading) fileInput.click();
+    if (!loading && !sheetsBusy) fileInput.click();
 });
 
 fileInput.addEventListener('change', () => selectFile(fileInput.files?.[0]));
 ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
     dropzone.addEventListener(eventName, event => {
         event.preventDefault();
-        dropzone.classList.toggle('drag-over', !loading && ['dragenter', 'dragover'].includes(eventName));
-        if (eventName === 'drop' && !loading) {
+        dropzone.classList.toggle('drag-over', !loading && !sheetsBusy && ['dragenter', 'dragover'].includes(eventName));
+        if (eventName === 'drop' && !loading && !sheetsBusy) {
             // Mantener el File en estado evita depender de asignar FileList/DataTransfer.
             fileInput.value = '';
             selectFile(event.dataTransfer.files?.[0]);
@@ -108,7 +120,7 @@ fileInput.addEventListener('change', () => selectFile(fileInput.files?.[0]));
 
 form.addEventListener('submit', async event => {
     event.preventDefault();
-    if (loading) return;
+    if (loading || sheetsBusy) return;
     const error = validateFile(selectedFile);
     if (error) { status.textContent = error; return; }
     const file = selectedFile;
@@ -122,7 +134,8 @@ form.addEventListener('submit', async event => {
             return;
         }
         clearReceiptState();
-        const nextReceipt = createReceipt(await extractReceipt(file));
+        const payload = await extractReceipt(file);
+        const nextReceipt = createReceipt(payload);
         receipt = nextReceipt;
         correctionSaver = createCorrectionSaver(receipt, {
             save: saveCorrections,
@@ -136,6 +149,7 @@ form.addEventListener('submit', async event => {
         storeName.value = receipt.storeName;
         dateValue.value = toDateInputValue(receipt.date);
         byId('rawOutput').value = receipt.rawText;
+        ocrReview.setPages(payload.ocrReview);
         renderTable();
         results.classList.remove('hidden');
         setActiveStep(1);
@@ -155,9 +169,11 @@ form.addEventListener('submit', async event => {
 });
 
 function clearReceiptState() {
+    ocrReview.clear();
     correctionSaver?.dispose();
     correctionSaver = null;
     receipt = null;
+    sheetsPanel.resetReceipt();
     output = buildExports([]);
     removedItem = null;
     clearTimeout(undoTimer);
@@ -179,6 +195,7 @@ function clearReceiptState() {
 
 function refresh() {
     if (!receipt) return;
+    sheetsPanel.refresh();
     output = buildExports(receipt.items);
     byId('itemCount').textContent = output.count;
     byId('totalValue').textContent = formatTotal(output.total);
@@ -222,7 +239,7 @@ function renderTable() {
 }
 
 function addManualItem() {
-    if (!receipt || loading) return;
+    if (!receipt || loading || sheetsBusy) return;
     const baseItem = receipt.items.find(item => String(item.categoria ?? '').trim()) || {};
     const newItem = {
         descripcion: '',
@@ -243,7 +260,7 @@ function addManualItem() {
 }
 
 function updateCommonField(field, value) {
-    if (!receipt || loading) return;
+    if (!receipt || loading || sheetsBusy) return;
     const cleaned = value.trim();
     if (field === 'fecha') receipt.date = cleaned;
     receipt.items.forEach(item => { item[field] = cleaned; });

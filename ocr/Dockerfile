@@ -22,6 +22,15 @@ COPY ocr/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir --default-timeout=180 --retries=5 -r requirements.txt
 
 COPY ocr/service.py ./service.py
+COPY ocr/image_variants.py ./image_variants.py
+COPY ocr/document_geometry.py ./document_geometry.py
+COPY ocr/illumination.py ./illumination.py
+COPY ocr/evaluate.py ./evaluate.py
+COPY ocr/ocr_regions.py ./ocr_regions.py
+COPY ocr/targeted_retry.py ./targeted_retry.py
+COPY ocr/variant_fusion.py ./variant_fusion.py
+COPY ocr/preview.py ./preview.py
+COPY ocr/model_paths.py ./model_paths.py
 COPY ocr/receipt_layout.py ./receipt_layout.py
 COPY ocr/preprocess.py ./preprocess.py
 COPY ocr/scoring.py ./scoring.py

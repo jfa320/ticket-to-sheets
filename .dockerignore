@@ -24,6 +24,14 @@ env/
 .env.*
 !.env.example
 
+# Datos locales y credenciales: se montan en runtime, nunca en el build.
+data/
+secrets/
+debug/
+test-data/
+logs/
+graphify-out/
+
 .idea/
 .vscode/
 *.iml

@@ -54,6 +54,34 @@ class ReceiptLayoutReaderTest {
     }
 
     @Test
+    void associatesStandaloneQuantityPriceRowWithFollowingProductTotal() {
+        ReceiptParserService parser = parser();
+        OcrResult ocr = new OcrResult(
+                "",
+                List.of(),
+                List.of(
+                        detection("MERCADO NUEVO", 10, 10, 180, 30),
+                        detection("PRODUCTO UNO", 80, 10, 220, 105),
+                        detection("1600,00", 80, 600, 690, 105),
+                        detection("2 X 3000,00", 110, 400, 580, 135),
+                        detection("PRODUCTO DOS", 140, 10, 220, 165),
+                        detection("6000,00", 140, 600, 690, 165)
+                ),
+                "enhanced",
+                84.0
+        );
+
+        ExtractResponse response = parser.parse(ocr);
+
+        assertEquals(2, response.itemCount(), response.csv());
+        assertEquals("1", response.items().get(0).cantidad());
+        assertEquals("2", response.items().get(1).cantidad());
+        assertEquals("3000,00", response.items().get(1).precioUnitario());
+        assertEquals("7600,00", response.total());
+        assertTrue(response.warnings().isEmpty(), response.warnings().toString());
+    }
+
+    @Test
     void treatsMissingConfidenceAsUnknownInsteadOfAmbiguous() {
         ReceiptParserService parser = parser();
         OcrResult ocr = new OcrResult(

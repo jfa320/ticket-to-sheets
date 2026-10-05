@@ -6,12 +6,20 @@ def merge_boxes_into_rows(boxes):
     for box in indexed_boxes:
         center = box["top"] + box["height"] / 2
         matching_row = None
+        closest_distance = float("inf")
 
         for row in rows:
-            threshold = max(18, min(row["height"], box["height"]) * 0.45)
-            if abs(center - row["center"]) <= threshold:
+            # Keep the tolerance proportional to the OCR text size. A fixed
+            # pixel minimum joins separate products after image downscaling.
+            threshold = max(row["height"], box["height"]) * 0.45
+            distance = abs(center - row["center"])
+            if distance > threshold or distance >= closest_distance:
+                continue
+            if any(horizontally_overlaps(box, item) for item in row["boxes"]):
+                continue
+            if any(vertical_overlap(box, item) >= 0.5 for item in row["boxes"]):
                 matching_row = row
-                break
+                closest_distance = distance
 
         if matching_row is None:
             rows.append({
@@ -43,3 +51,15 @@ def merge_boxes_into_rows(boxes):
 
     lines.sort(key=lambda item: (item["top"], item["left"]))
     return lines
+
+
+def horizontally_overlaps(first, second):
+    overlap = min(first["right"], second["right"]) - max(first["left"], second["left"])
+    smaller_width = min(first["right"] - first["left"], second["right"] - second["left"])
+    return smaller_width > 0 and overlap >= smaller_width * 0.5
+
+
+def vertical_overlap(first, second):
+    overlap = max(0, min(first["bottom"], second["bottom"]) - max(first["top"], second["top"]))
+    smaller_height = min(first["height"], second["height"])
+    return overlap / smaller_height if smaller_height > 0 else 0

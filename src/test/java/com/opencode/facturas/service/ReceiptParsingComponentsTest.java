@@ -18,6 +18,43 @@ class ReceiptParsingComponentsTest {
     private final ReceiptLineAnalyzer lineAnalyzer = new ReceiptLineAnalyzer();
 
     @Test
+    void readsSpanishDeliveryDatesIncludingSplitOcrHeader() {
+        ReceiptDateParser parser = new ReceiptDateParser(lineAnalyzer,
+                Clock.fixed(Instant.parse("2026-10-05T12:00:00Z"), ZoneOffset.UTC));
+        assertEquals("30/9/2026", parser.extractNormalized(List.of("Entregado mié 30 de sept · 22:04 hs")));
+        assertEquals("30/9/2026", parser.extractNormalized(List.of("Entregada", "mié 30 de", "sept · 22:04 hs")));
+        assertEquals("30/9/2026", parser.extractNormalized(List.of("mie 3O de sep. - 22:04 hs")));
+        assertEquals("30/9/2025", parser.extractNormalized(List.of("Entregado 30 de septiembre de 2025")));
+        assertEquals("2/1/2026", parser.extractNormalized(List.of("Fecha: 2 de enero de 2026")));
+        assertEquals("30/9/2026", parser.extractNormalized(List.of("Entregado 30/09/2026 22:04")));
+    }
+
+    @Test
+    void ignoresTextualExpiryDatesProductsAndInvalidDays() {
+        ReceiptDateParser parser = new ReceiptDateParser(lineAnalyzer);
+        for (String line : List.of("Entregado 31 de sept", "Vencimiento 30 de sept",
+                "Fecha de vencimiento 30 de sept", "Inicio actividad 30 de septiembre de 2020",
+                "Producto edición 30 de sept $ 1.500", "Entrega estimada 30 de sept")) {
+            assertEquals("", parser.extractNormalized(List.of(line)), line);
+        }
+        assertEquals("26/9/2026", parser.extractNormalized(List.of("Entregado 30 de sept", "Fecha 26/09/2026")));
+    }
+
+    @Test
+    void validatesCalendarAndRecognizesEverySpanishMonth() {
+        ReceiptDateParser parser = new ReceiptDateParser(lineAnalyzer);
+        List<String> months = List.of("enero", "febrero", "marzo", "abril", "mayo", "junio",
+                "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre");
+        for (int index = 0; index < months.size(); index++) {
+            assertEquals("1/" + (index + 1) + "/2025",
+                    parser.extractNormalized(List.of("Fecha 1 de " + months.get(index) + " de 2025")));
+        }
+        assertEquals("29/2/2024", parser.extractNormalized(List.of("Fecha 29 de feb de 2024")));
+        assertEquals("", parser.extractNormalized(List.of("Fecha 29 de feb de 2025")));
+        assertEquals("30/9/2025", parser.extractNormalized(List.of("Entregada 30 de setiembre de 2025")));
+    }
+
+    @Test
     void extractsAndNormalizesReceiptDateWithOcrSeparators() {
         Clock clock = Clock.fixed(Instant.parse("2026-06-01T00:00:00Z"), ZoneOffset.UTC);
         ReceiptDateParser parser = new ReceiptDateParser(lineAnalyzer, clock);

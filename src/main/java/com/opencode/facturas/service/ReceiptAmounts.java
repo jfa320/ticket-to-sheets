@@ -54,4 +54,10 @@ final class ReceiptAmounts {
         DecimalFormat format = new DecimalFormat("0.####", DecimalFormatSymbols.getInstance(LOCALE_AR));
         return format.format(quantity);
     }
+
+    boolean isConsistent(double unitPrice, double quantity, double total) {
+        double expected = unitPrice * quantity;
+        double tolerance = Math.max(0.05, Math.abs(total) * 0.03);
+        return Math.abs(expected - total) <= tolerance;
+    }
 }

@@ -3,6 +3,7 @@ package com.opencode.facturas.controller;
 import com.opencode.facturas.model.ExtractResponse;
 import com.opencode.facturas.model.OcrResult;
 import com.opencode.facturas.service.OcrService;
+import com.opencode.facturas.service.OcrReviewMapper;
 import com.opencode.facturas.service.ReceiptParserService;
 import org.springframework.http.MediaType;
 import org.springframework.validation.annotation.Validated;
@@ -38,7 +39,9 @@ public class ReceiptController {
 
         log.info("Iniciando extracción: tipo={}, tamaño={} bytes", file.getContentType(), file.getSize());
         OcrResult ocrResult = ocrService.extract(file);
-        ExtractResponse response = parserService.parse(ocrResult).withOcrMetadata(ocrResult.variant(), ocrResult.score());
+        ExtractResponse response = parserService.parse(ocrResult)
+                .withOcrMetadata(ocrResult.variant(), ocrResult.score())
+                .withOcrReview(OcrReviewMapper.pages(ocrResult));
         log.info("Extracción completada: caracteresOCR={}, líneasOCR={}, items={}, advertencias={}",
                 ocrResult.text() == null ? 0 : ocrResult.text().length(),
                 ocrResult.lines() == null ? 0 : ocrResult.lines().size(),
