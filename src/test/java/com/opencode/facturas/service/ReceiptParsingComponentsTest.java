@@ -18,10 +18,25 @@ class ReceiptParsingComponentsTest {
     private final ReceiptLineAnalyzer lineAnalyzer = new ReceiptLineAnalyzer();
 
     @Test
+    void distinguishesFiscalIvaFromLettersInsideProducts() {
+        for (String product : List.of("DULCIVAINILLA 80GR 600,00", "ACEITE DE OLIVA 1200,00")) {
+            String normalized = lineAnalyzer.normalize(product);
+            assertFalse(lineAnalyzer.containsMetadata(normalized), product);
+            assertFalse(lineAnalyzer.shouldSkip(normalized), product);
+        }
+        for (String metadata : List.of("IVA Contenido 21%: 100,00", "IVA RESPONSABLE INSCRIPTO",
+                "IVA21% 100,00", "IVACONTENIDO21% 100,00")) {
+            assertTrue(lineAnalyzer.containsMetadata(lineAnalyzer.normalize(metadata)), metadata);
+        }
+    }
+
+    @Test
     void readsSpanishDeliveryDatesIncludingSplitOcrHeader() {
         ReceiptDateParser parser = new ReceiptDateParser(lineAnalyzer,
                 Clock.fixed(Instant.parse("2026-10-05T12:00:00Z"), ZoneOffset.UTC));
         assertEquals("30/9/2026", parser.extractNormalized(List.of("Entregado mié 30 de sept · 22:04 hs")));
+        assertEquals("9/10/2026", parser.extractNormalized(List.of("Entregado vie 09de oct·19:41 hs Ir al local")));
+        assertEquals("9/10/2026", parser.extractNormalized(List.of("Entregado vie 09deoct·19:41 hs")));
         assertEquals("30/9/2026", parser.extractNormalized(List.of("Entregada", "mié 30 de", "sept · 22:04 hs")));
         assertEquals("30/9/2026", parser.extractNormalized(List.of("mie 3O de sep. - 22:04 hs")));
         assertEquals("30/9/2025", parser.extractNormalized(List.of("Entregado 30 de septiembre de 2025")));

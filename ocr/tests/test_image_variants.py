@@ -14,6 +14,33 @@ from image_variants import MAX_PIXELS, MAX_SHORT_SIDE, build_variants, crop_rece
 
 
 class ImageVariantsTest(unittest.TestCase):
+    def test_search_can_probe_one_orientation_then_full_illumination_before_crops(self):
+        image = Image.new("RGB", (80, 120), "white")
+        with patch("image_variants.illumination_variants",
+                   side_effect=lambda candidate: iter([("shadow-normalized", candidate.convert("L"))])), \
+                patch("image_variants.crop_receipt_region") as crop:
+            variants = build_variants(image, rotations=(270,), prioritize_corrections=True, with_metadata=True)
+            name, candidate, metadata = next(variants)
+            self.assertEqual("original-rot270", name)
+            self.assertEqual((120, 80), candidate.size)
+            self.assertEqual("full:270", metadata["frame"])
+            self.assertEqual("shadow-normalized-rot270", next(variants)[0])
+            crop.assert_not_called()
+            variants.close()
+
+    def test_single_rotation_geometry_uses_source_coordinates_before_rotating(self):
+        image = Image.new("RGB", (80, 120), "white")
+        corrected = Image.new("RGB", (60, 100), "gray")
+        with patch("image_variants.correct_document_geometry", return_value=corrected) as geometry, \
+                patch("image_variants.illumination_variants", return_value=iter(())):
+            variants = build_variants(image, rotations=(270,), prioritize_corrections=True)
+            next(variants)
+            name, candidate = next(variants)
+            self.assertEqual("geometry-rot270", name)
+            self.assertEqual((100, 60), candidate.size)
+            geometry.assert_called_once_with(image)
+            variants.close()
+
     def test_geometry_is_reused_across_orientations_and_originals_are_preserved(self):
         image = Image.new("RGB", (80, 120), (230, 240, 220))
         corrected = Image.new("RGB", (60, 100), "white")

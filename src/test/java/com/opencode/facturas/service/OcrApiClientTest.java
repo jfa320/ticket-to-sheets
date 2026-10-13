@@ -14,6 +14,7 @@ import org.springframework.web.client.RestTemplate;
 
 import java.awt.image.BufferedImage;
 import java.net.URI;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -28,6 +29,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 class OcrApiClientTest {
 
@@ -82,7 +84,7 @@ class OcrApiClientTest {
     }
 
     @Test
-    void reportsEndpointAfterExhaustingHealthRetries() {
+    void reportsModelsPendingAfterExhaustingHealthRetries() {
         RestTemplate restTemplate = mock(RestTemplate.class);
         when(restTemplate.getForEntity(HEALTH_URI, String.class))
                 .thenReturn(ResponseEntity.ok("{\"ocrReady\":false}"));
@@ -91,10 +93,10 @@ class OcrApiClientTest {
         assertThatThrownBy(() -> client(restTemplate, 2, waits).recognize(
                 new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB)
         ))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(OCR_ENDPOINT);
+                .isInstanceOf(OcrUnavailableException.class)
+                .hasMessageContaining("preparando los modelos");
 
-        assertThat(waits).containsExactly(1, 2);
+        assertThat(waits).containsExactly(1);
         verify(restTemplate, times(2)).getForEntity(HEALTH_URI, String.class);
         verify(restTemplate, never()).postForEntity(eq(OCR_URI), any(HttpEntity.class), eq(String.class));
     }
@@ -119,6 +121,74 @@ class OcrApiClientTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("500")
                 .hasMessageContaining("fallo interno");
+    }
+
+    @Test
+    void reportsUnavailableLocalServiceWithoutAssumingDocker() {
+        RestTemplate restTemplate = mock(RestTemplate.class);
+        when(restTemplate.getForEntity(HEALTH_URI, String.class))
+                .thenThrow(new ResourceAccessException("offline"));
+        List<Integer> waits = new ArrayList<>();
+
+        assertThatThrownBy(() -> client(restTemplate, 2, waits).recognize(
+                new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB)))
+                .isInstanceOf(OcrUnavailableException.class)
+                .hasMessageContaining("Iniciá el servicio OCR")
+                .hasMessageNotContaining("Docker");
+
+        assertThat(waits).containsExactly(1);
+        verify(restTemplate, never()).postForEntity(eq(OCR_URI), any(HttpEntity.class), eq(String.class));
+    }
+
+    @Test
+    void healthUsesItsOwnClientAndBusyServiceDoesNotStartAnotherRead() {
+        RestTemplate extractionClient = mock(RestTemplate.class);
+        RestTemplate healthClient = mock(RestTemplate.class);
+        when(healthClient.getForEntity(HEALTH_URI, String.class))
+                .thenReturn(ResponseEntity.ok("{\"ocrReady\":true,\"ocrBusy\":true}"));
+        List<Integer> waits = new ArrayList<>();
+        OcrApiClient client = new OcrApiClient(new ObjectMapper(), extractionClient, healthClient,
+                OCR_ENDPOINT, HEALTH_ENDPOINT, "es", 3, waits::add);
+
+        assertThatThrownBy(() -> client.recognize(new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB)))
+                .isInstanceOf(ExtractionBusyException.class);
+
+        assertThat(waits).isEmpty();
+        verify(healthClient).getForEntity(HEALTH_URI, String.class);
+        verifyNoInteractions(extractionClient);
+    }
+
+    @Test
+    void neverRetriesAnOcrReadAfterItsResponseTimesOut() {
+        RestTemplate restTemplate = mock(RestTemplate.class);
+        when(restTemplate.getForEntity(HEALTH_URI, String.class))
+                .thenReturn(ResponseEntity.ok("{\"ocrReady\":true}"));
+        when(restTemplate.postForEntity(eq(OCR_URI), any(HttpEntity.class), eq(String.class)))
+                .thenThrow(new ResourceAccessException("timeout", new SocketTimeoutException()));
+        List<Integer> waits = new ArrayList<>();
+
+        assertThatThrownBy(() -> client(restTemplate, 3, waits).recognize(
+                new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB)))
+                .hasMessageContaining("La lectura puede seguir en curso");
+
+        assertThat(waits).isEmpty();
+        verify(restTemplate).postForEntity(eq(OCR_URI), any(HttpEntity.class), eq(String.class));
+    }
+
+    @Test
+    void preservesBusyResponseWhenAnotherClientStartsBetweenHealthAndPost() {
+        RestTemplate restTemplate = mock(RestTemplate.class);
+        when(restTemplate.getForEntity(HEALTH_URI, String.class))
+                .thenReturn(ResponseEntity.ok("{\"ocrReady\":true}"));
+        when(restTemplate.postForEntity(eq(OCR_URI), any(HttpEntity.class), eq(String.class)))
+                .thenThrow(org.springframework.web.client.HttpClientErrorException.create(
+                        HttpStatus.TOO_MANY_REQUESTS, "busy", HttpHeaders.EMPTY,
+                        new byte[0], StandardCharsets.UTF_8));
+
+        assertThatThrownBy(() -> client(restTemplate, 3, ignored -> { }).recognize(
+                new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB)))
+                .isInstanceOf(ExtractionBusyException.class);
+        verify(restTemplate).postForEntity(eq(OCR_URI), any(HttpEntity.class), eq(String.class));
     }
 
     private OcrApiClient client(RestTemplate restTemplate, int maxAttempts, List<Integer> waits) {

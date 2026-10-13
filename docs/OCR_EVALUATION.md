@@ -4,6 +4,10 @@
 
 Las pruebas unitarias usan imágenes sintéticas y un motor simulado. No demuestran por sí solas que PaddleOCR reconozca mejor los tickets reales. Este procedimiento permite medirlo con los mismos archivos y las mismas transcripciones en ambos modos.
 
+La búsqueda adaptativa se activa por defecto y tiene un presupuesto de 90 segundos por imagen/página, comprobado entre pasadas. Para aislar los efectos de geometría, relectura o combinación en las comparaciones de esta guía, definí `$env:OCR_ADAPTIVE_SEARCH = "false"` en ambas ejecuciones. Para medir la propia búsqueda adaptativa, compará una ejecución con `false` contra otra con `true`, manteniendo las demás opciones iguales; registrá también `OCR_SEARCH_BUDGET_SECONDS`. Recreá el OCR de Compose o reiniciá Python nativo después de cambiar variables. Con debug habilitado, `search-summary.json` distingue cierre por consenso, presupuesto o agotamiento de variantes.
+
+Cuando la relectura está activa, la búsqueda reserva hasta 12 segundos (15% del presupuesto) para la última etapa. Las zonas de fecha y los precios dudosos se atienden primero. El scoring concede evidencia acotada a una fecha de compra válida y, con geometría disponible, excluye el pie posterior a subtotal/total/recibido del conteo de productos; nunca ajusta importes para que coincidan con el total impreso.
+
 ## Preparar los casos
 
 1. Creá `test-data/ocr-evaluation/`. Todo el directorio `test-data/` está ignorado por Git.
@@ -67,6 +71,10 @@ python ocr/evaluate.py test-data/ocr-evaluation/manifest.json --output test-data
 ```
 
 Aplicá el mismo calentamiento previo y usá exactamente los mismos casos. La relectura procesa como máximo ocho zonas de baja confianza de la variante ganadora, mediante dos tratamientos de cada recorte. Solo acepta cambios cuando ambas lecturas coinciden y superan la confianza anterior; también comprueba cobertura y contenido para rechazar fragmentos o texto vecino. Conserva el resultado previo si no se cumplen esas condiciones.
+
+La selección también incluye precios con confianza inferior a 0,97 y fechas incompletas con confianza inferior a 0,98. Si la confianza original es al menos 0,80, ambas lecturas nuevas deben alcanzar 0,98. Para precios se exige una mejora mínima de 0,02; para fechas incompletas, una fecha válida y confianza igual o superior a la original. Los demás textos conservan los umbrales anteriores (original < 0,80, lecturas >= 0,85 y mejora >= 0,10).
+
+En variantes de encuadre completo se usan píxeles originales para la relectura, manteniendo las coordenadas de la variante elegida. En recortes o perspectiva se usa su propia imagen. Al comparar, mantené estas opciones iguales en ambos informes y verificá también las cajas, porque el precio o nombre corregido debe seguir perteneciendo al mismo producto.
 
 En los informes, `variant` termina en `+retry` cuando hubo al menos una corrección aceptada. Si la variante no tiene ese sufijo, pudo haber intentos sin cambios aceptados. Para diagnosticarlo, `APP_OCR_DEBUG=true` agrega `targeted-retry.json` con contadores en la carpeta de debug de cada ejecución; las demás salidas de debug pueden contener texto e imágenes del ticket y deben permanecer locales.
 

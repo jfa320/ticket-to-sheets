@@ -16,6 +16,36 @@ def positioned_line(text, top, confidence=0.9, left=0):
 
 
 class ScoringTest(unittest.TestCase):
+    def test_prefers_a_valid_purchase_date_over_a_truncated_or_impossible_date(self):
+        products = [line("PRODUCTO ALFA 1200,00", .95), line("PRODUCTO BETA 800,00", .95)]
+        good = score_lines(products + [line("Fecha25/09/2026 Hora19:45:42", .95)])
+        for bad in ("Fecha25/C902 Hora19:45:42", "Fecha31/09/2026", "Fecha25/09/2002"):
+            self.assertGreater(good, score_lines(products + [line(bad, .95)]))
+
+    def test_geometric_footer_noise_does_not_count_as_additional_products(self):
+        body = [positioned_line("PRODUCTO ALFA 1200,00", 20, .95), positioned_line("Subtotal 1200,00", 60, .95)]
+        fake_footer = positioned_line("ARJETA CE DHITE 1200,00", 100, .95)
+        actual_product = positioned_line("PRODUCTO BETA 1200,00", 40, .95)
+        self.assertGreater(score_lines(body + [actual_product]), score_lines(body + [fake_footer]))
+
+    def test_detached_amounts_never_turn_nonempty_text_into_failed_reading(self):
+        self.assertGreaterEqual(score_lines([line("1200,00", 0.99)] * 60), 0)
+
+    def test_complete_rows_beat_more_confident_reading_with_detached_prices(self):
+        header = [line("COMERCIO PRUEBA", 0.98), line("Fecha 12/10/2026", 0.98)]
+        aligned = header + [line("PRODUCTO ALFA 1200,00", 0.92),
+                            line("PRODUCTO BETA 800,00", 0.92), line("TOTAL 2000,00", 0.98)]
+        detached = header + [line("PRODUCTO ALFA", 0.99), line("1200,00", 0.99),
+                             line("PRODUCTO BETA", 0.99), line("800,00", 0.99),
+                             line("TOTAL", 0.99), line("2000,00", 0.99)]
+        self.assertGreater(score_lines(aligned), score_lines(detached))
+
+    def test_legal_identifiers_and_thousands_without_decimals_are_not_product_prices(self):
+        for text in ("CONSUMIDOR (LEY 27.743)", "ARTICULO 1.000", "CAJA 123.456.789"):
+            self.assertFalse(looks_like_item_line(text), text)
+        self.assertTrue(looks_like_item_line("PRODUCTO 1.200,00"))
+        self.assertTrue(looks_like_item_line("PRODUCTO $ 1200.00"))
+
     def test_prefers_market_variant_that_preserves_small_delivery_date(self):
         products = [line("PRODUCTO ALFA $ 4.577,50 1x", 0.95)]
         readable = line("Entregado mié 30 de sept · 22:04 hs", 0.95)

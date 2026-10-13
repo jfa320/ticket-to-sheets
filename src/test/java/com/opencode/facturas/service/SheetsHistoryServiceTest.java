@@ -160,4 +160,67 @@ class SheetsHistoryServiceTest {
         assertThat(result.items().get(0).categoria()).isEqualTo("Categoría manual");
         assertThat(result.warnings()).noneMatch(warning -> warning.contains("historial"));
     }
+
+    @Test void localExcelHistoryWorksWithoutGoogleConfigurationAndCombinesWithSync() throws Exception {
+        Path local = cache.resolveSibling("local-history.json");
+        var product = new Product("Jabón neutro 500g", "Marca Prueba", "Comercio prueba", "Limpieza");
+        mapper.writeValue(local.toFile(), new Snapshot(true, "", 2, "2026-10-13T12:00:00Z", 7,
+                List.of("Enero", "Febrero"), List.of(), List.of(product)));
+        var unconfigured = new SheetsConfigStore(mapper, directory.resolve("empty-config.json").toString());
+        var offline = new SheetsHistoryService(mapper, unconfigured, client, StoreNameMapper.empty(), cache.toString());
+        assertThat(offline.status().active()).isTrue();
+        assertThat(offline.status().rowCount()).isEqualTo(7);
+        assertThat(offline.enrich(List.of(item()), new ArrayList<>()).get(0).estado()).isEqualTo("HISTORY");
+        verifyNoInteractions(client);
+        assertThat(service.sync(destination).productCount()).isEqualTo(2);
+        assertThat(service.status().rowCount()).isEqualTo(10);
+        assertThat(service.status().sheets()).contains("Enero", "Febrero", "Otro mes");
+        config.save(configuration("other_synthetic_sheet_id_1234567890", "Mes siguiente", 2));
+        assertThat(service.status().active()).isTrue();
+        assertThat(service.status().productCount()).isEqualTo(1);
+        assertThat(service.disable().active()).isFalse();
+        assertThat(newService().status().active()).isFalse();
+    }
+
+    @Test void damagedLocalHistoryDoesNotPreventSheetsHistoryFromWorking() throws Exception {
+        Files.writeString(cache.resolveSibling("local-history.json"), "{broken synthetic json");
+        assertThat(service.sync(destination).active()).isTrue();
+        assertThat(service.enrich(List.of(item()), new ArrayList<>()).get(0).estado()).isEqualTo("HISTORY");
+    }
+
+    @Test void correctedUnknownBrandIsUsedOnTheNextExtractionWithANewPrice() {
+        CorrectionMemory memory = new CorrectionMemory(mapper, directory.resolve("corrections.json"));
+        var brands = new BrandCatalog(mapper, directory.resolve("brands.json"));
+        var parser = new ReceiptParserService(StoreNameMapper.empty(), brands, memory);
+        var first = parser.parse("COMERCIO PRUEBA\nFECHA 04/10/2026\nJABON NEUTRO 500G 1000,00").items().get(0);
+        var controller = new com.opencode.facturas.controller.CorrectionController(memory, brands);
+        controller.learn(new com.opencode.facturas.model.CorrectionsRequest("Comercio prueba",
+                List.of(new com.opencode.facturas.model.CorrectionsRequest.Correction(
+                        first.firma(), "Jabón neutro 500g", "Marca Prueba", "Limpieza", "Genérico"))));
+        var reloaded = new CorrectionMemory(mapper, directory.resolve("corrections.json"));
+        var next = new ReceiptParserService(StoreNameMapper.empty(), brands, reloaded)
+                .parse("COMERCIO PRUEBA\nFECHA 13/10/2026\nJABON NEUTRO 500G 2500,00");
+        assertThat(next.items()).hasSize(1);
+        assertThat(next.items().get(0).descripcion()).isEqualTo("Jabón neutro 500g");
+        assertThat(next.items().get(0).marca()).isEqualTo("Marca Prueba");
+        assertThat(next.items().get(0).categoria()).isEqualTo("Limpieza");
+        assertThat(next.items().get(0).estado()).isEqualTo("LEARNED");
+        assertThat(next.total()).isEqualTo("2500,00");
+    }
+
+    @Test void historicalBrandsAreRecognizedBeforeGeneralProductExpansionWithoutChangingTheBrandFile() throws Exception {
+        Path local = cache.resolveSibling("local-history.json");
+        mapper.writeValue(local.toFile(), new Snapshot(true, "", 2, "2026-10-13T12:00:00Z", 1,
+                List.of("Mes"), List.of(), List.of(new Product("Ñoquis 450gr", "La Salteña", "Comercio prueba", "Supermercado"))));
+        var brandsPath = directory.resolve("brands.json");
+        var brands = new BrandCatalog(mapper, brandsPath);
+        var before = Files.readString(brandsPath);
+        var parser = new ReceiptParserService(StoreNameMapper.empty(), brands,
+                new CorrectionMemory(mapper, directory.resolve("corrections.json")), service);
+        var result = parser.parse("COMERCIO PRUEBA\nLA SALTENA NOQ450GR 6000,00\nSubtotal 6000,00");
+        assertThat(result.items()).hasSize(1);
+        assertThat(result.items().get(0).marca()).isEqualTo("La Salteña");
+        assertThat(result.items().get(0).descripcion()).isEqualTo("Ñoquis 450gr");
+        assertThat(Files.readString(brandsPath)).isEqualTo(before);
+    }
 }

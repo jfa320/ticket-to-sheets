@@ -19,6 +19,26 @@ class ReceiptLayoutReaderTest {
     Path tempDir;
 
     @Test
+    void preservesRepeatedProductsWhenOcrJoinsBrandAndFlavourContainingIva() {
+        OcrResult ocr = new OcrResult("", List.of(), List.of(
+                detection("MERCADO NUEVO", 10, 10, 180, 30),
+                detection("DULCI VAINILLA 80GR", 100, 10, 250, 124),
+                detection("600,00", 100, 500, 580, 124),
+                detection("DULCIVAINILLA 80GR", 140, 10, 250, 164),
+                detection("600,00", 140, 500, 580, 164),
+                detection("IVA CONTENIDO 21% 208,26", 200, 10, 280, 224)
+        ), "geometry", 100.0);
+
+        ExtractResponse response = parser().parse(ocr);
+
+        assertEquals(2, response.itemCount(), response.csv());
+        assertEquals("600,00", response.items().get(0).precioUnitario());
+        assertEquals("600,00", response.items().get(1).precioUnitario());
+        assertEquals("1200,00", response.total());
+        assertTrue(response.warnings().isEmpty(), response.warnings().toString());
+    }
+
+    @Test
     void readsQuantityUnitPriceAndTotalFromOcrColumns() {
         ReceiptParserService parser = parser();
         OcrResult ocr = new OcrResult(

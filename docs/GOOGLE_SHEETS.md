@@ -60,11 +60,11 @@ Después de guardar y comprobar el destino, pulsá **Actualizar historial**. La 
 
 La sincronización es manual y reemplaza el catálogo local únicamente al completar la lectura. Un error de conexión conserva la versión anterior. El catálogo funciona sin Internet en las próximas extracciones; actualizarlo no modifica el ticket que ya tenés abierto. Volvé a extraerlo si querés aplicar el catálogo nuevo.
 
-El cruce considera el **texto original de la línea**, el comercio y la marca, para evitar confundir sabores o presentaciones que el parser haya resumido. Coincidencias exactas y sin contradicciones completan descripción, marca y categoría. Si hay varias marcas, variantes o categorías incompatibles, no se decide por mayoría. Las aproximaciones solo aparecen como sugerencias en las advertencias. Una marca reconocida que contradice la historia se conserva.
+El cruce considera el **texto original de la línea**, el comercio y la marca, para evitar confundir sabores o presentaciones que el parser haya resumido. Coincidencias exactas o aproximaciones claras y sin contradicciones completan descripción, marca y categoría. Admite errores OCR, abreviaturas comunes, palabras reordenadas y unidades equivalentes. Si hay varias marcas, variantes o categorías incompatibles, no se decide por mayoría. Las aproximaciones dudosas aparecen como sugerencias en las advertencias. Una marca reconocida que contradice la historia se conserva.
 
 Las correcciones manuales de `data/corrections.json` tienen prioridad. No se sustituyen cantidades, precios, fechas ni comercios; no se recuperan líneas descartadas basándose únicamente en el historial y no se entrena el motor PaddleOCR. Las filas exactas se marcan **Historial**, salvo que ya requieran revisión por ambigüedad.
 
-El archivo local `data/sheets-history.json` conserva los campos de producto, contadores, origen y fecha de actualización. No almacena importes, fechas de compra ni imágenes. Está ignorado por Git y excluido del build Docker; su respaldo `.bak` también está ignorado. **Dejar de usar historial** desactiva su aplicación. Al elegir otro archivo o fila de encabezados no se aplica un catálogo ajeno; cambiar solo la pestaña mensual del mismo archivo conserva su utilidad.
+El archivo local `data/sheets-history.json` conserva los campos de producto, contadores, origen y fecha de actualización. No almacena importes, fechas de compra ni imágenes. Está ignorado por Git y excluido del build Docker; su respaldo `.bak` también está ignorado. Puede combinarse con `data/local-history.json`, importado desde Excel mediante `scripts/import_purchase_history.py` (ver README). **Dejar de usar historial** desactiva ambos. Al elegir otro archivo o fila de encabezados deja de aplicarse el catálogo de Sheets de otro destino; el catálogo de Excel sigue activo. Cambiar solo la pestaña mensual del mismo archivo conserva su utilidad.
 
 La lectura tiene un límite de **50.000 celdas** por sincronización. No se instala una base de datos ni se consulta Google por cada ticket. Esta ayuda reduce trabajo de revisión en productos repetidos; no garantiza reconocer productos nuevos o imágenes ilegibles.
 
@@ -75,6 +75,7 @@ La lectura tiene un límite de **50.000 celdas** por sincronización. No se inst
 | `app.sheets.credentials-path` | `APP_SHEETS_CREDENTIALS_PATH` | `data/google-service-account.json` |
 | `app.sheets.config-path` | `APP_SHEETS_CONFIG_PATH` | `data/sheets-config.json` |
 | `app.sheets.history-path` | `APP_SHEETS_HISTORY_PATH` | `data/sheets-history.json` |
+| `app.sheets.local-history-path` | `APP_LOCAL_HISTORY_PATH` | `data/local-history.json` |
 | `app.sheets.timeout-ms` | `APP_SHEETS_TIMEOUT_MS` | `15000` |
 
 En Compose, las rutas predeterminadas son `/app/data/...`. `.env.example` contiene valores para ese entorno. Para una clave fuera del proyecto al correr Maven en Windows:

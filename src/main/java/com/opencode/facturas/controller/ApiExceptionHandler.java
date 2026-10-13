@@ -1,5 +1,7 @@
 package com.opencode.facturas.controller;
 
+import com.opencode.facturas.service.ExtractionBusyException;
+import com.opencode.facturas.service.OcrUnavailableException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -54,6 +56,19 @@ public class ApiExceptionHandler {
         log.warn("Solicitud rechazada: {} - {}", ex.getClass().getSimpleName(), message, ex);
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(errorBody(message));
+    }
+
+    @ExceptionHandler(ExtractionBusyException.class)
+    public ResponseEntity<Map<String, String>> handleBusy(ExtractionBusyException ex) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .body(errorBody(ex.getMessage()));
+    }
+
+    @ExceptionHandler(OcrUnavailableException.class)
+    public ResponseEntity<Map<String, String>> handleOcrUnavailable(OcrUnavailableException ex) {
+        log.warn("OCR no disponible: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(errorBody(ex.getMessage()));
     }
 
     @ExceptionHandler(IllegalStateException.class)

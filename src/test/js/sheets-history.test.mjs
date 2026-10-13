@@ -17,7 +17,9 @@ test('history API pins the destination and sends no receipts or credentials', as
     assert.deepEqual(calls.map(call => [call.url, call.options.method]), [
         ['/api/sheets/history', 'GET'], ['/api/sheets/history/sync', 'POST'], ['/api/sheets/history', 'DELETE']
     ]);
-    assert.deepEqual(JSON.parse(calls[1].options.body), destination);
+    assert.deepEqual(JSON.parse(calls[1].options.body), {
+        spreadsheetId: destination.spreadsheetId, headerRow: destination.headerRow
+    });
 });
 
 test('failed refresh preserves the previously confirmed history', async () => {

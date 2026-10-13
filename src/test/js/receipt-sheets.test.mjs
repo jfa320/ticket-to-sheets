@@ -10,7 +10,7 @@ test('configuration accepts Google Sheet URLs and rejects foreign hosts', () => 
     assert.equal(spreadsheetIdFromInput(`https://docs.google.com/spreadsheets/d/${config.spreadsheetId}/edit#gid=1`), config.spreadsheetId);
     for (const url of ['https://evil.example/spreadsheets/d/abc', 'https://docs.google.com.evil.example/spreadsheets/d/abc',
         `https://user@docs.google.com/spreadsheets/d/${config.spreadsheetId}`, 'short']) assert.equal(spreadsheetIdFromInput(url), '');
-    assert.deepEqual(sheetsConfigErrors({...config, spreadsheetUrlOrId: config.spreadsheetId}), []);
+    assert.deepEqual(sheetsConfigErrors({...config, year: 2026, spreadsheetUrlOrId: config.spreadsheetId}), []);
     assert.equal(sheetsConfigErrors({spreadsheetUrlOrId: '', sheetName: '', headerRow: 0}).length, 3);
 });
 

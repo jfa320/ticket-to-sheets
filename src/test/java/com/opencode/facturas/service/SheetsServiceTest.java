@@ -68,6 +68,25 @@ class SheetsServiceTest {
         return mapper.valueToTree(capture.getValue());
     }
 
+    @Test void writesDiscountAsNegativeNumberAndKeepsQuantityTimesPriceFormula() {
+        ReceiptItem discount = new ReceiptItem("Descuento", "Genérico", "Perfumerias Pigmento", "Perfumeria",
+                "1", "-9491,66", "5/10/2026");
+
+        AppendResponse result = service.append(new AppendRequest(UUID, List.of(discount), destination, config.version()));
+
+        assertThat(result.appendedRows()).isEqualTo(1);
+        JsonNode cells = writtenBatch().path("requests").get(0).path("updateCells").path("rows").get(0).path("values");
+        assertThat(cells.get(0).path("userEnteredValue").path("stringValue").asText()).isEqualTo("Descuento");
+        assertThat(cells.get(1).path("userEnteredValue").path("stringValue").asText()).isEqualTo("Genérico");
+        assertThat(cells.get(2).path("userEnteredValue").path("stringValue").asText()).isEqualTo("Perfumerias Pigmento");
+        assertThat(cells.get(3).path("userEnteredValue").path("stringValue").asText()).isEqualTo("Perfumeria");
+        assertThat(cells.get(4).path("userEnteredValue").path("numberValue").decimalValue()).isEqualByComparingTo("1");
+        assertThat(cells.get(5).path("userEnteredValue").path("numberValue").decimalValue()).isEqualByComparingTo("-9491.66");
+        assertThat(cells.get(6).path("userEnteredValue").path("numberValue").asLong()).isEqualTo(
+                ChronoUnit.DAYS.between(LocalDate.of(1899, 12, 30), LocalDate.of(2026, 10, 5)));
+        assertThat(cells.get(7).path("userEnteredValue").path("formulaValue").asText()).isEqualTo("=E4*F4");
+    }
+
     @Test void writesSelectedSnapshotWithTypedNumbersDatesAndLiteralTextOnlyInAtoH() {
         AppendResponse result = service.append(request());
         assertThat(result.updatedRange()).isEqualTo("'Mes '' Prueba'!A4:H4");

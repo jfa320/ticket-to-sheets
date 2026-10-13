@@ -1,6 +1,7 @@
 package com.opencode.facturas.util;
 
 import com.opencode.facturas.model.ReceiptItem;
+import com.opencode.facturas.model.ReceiptDiscount;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -18,6 +19,15 @@ public final class DelimitedExporter {
     );
 
     private DelimitedExporter() {
+    }
+
+    public static List<ReceiptItem> withDiscounts(List<ReceiptItem> items, List<ReceiptDiscount> discounts,
+                                                String storeName, String category, String date) {
+        List<ReceiptItem> rows = new ArrayList<>(items);
+        for (ReceiptDiscount discount : discounts) {
+            rows.add(new ReceiptItem("Descuento", "Genérico", storeName, category, "1", discount.importe(), date));
+        }
+        return List.copyOf(rows);
     }
 
     public static String toPipeSeparated(List<ReceiptItem> items) {

@@ -41,15 +41,13 @@ public class CorrectionController {
             if (correction.firma().isBlank()) {
                 continue;
             }
-            if (isGeneric(correction.marcaOriginal()) || isGeneric(correction.marca())) {
-                continue;
-            }
             correctionMemory.upsert(
                     request.store(),
                     correction.firma(),
                     correction.descripcion(),
                     correction.marca(),
-                    correction.categoria()
+                    correction.categoria(),
+                    correction.marcaOriginal()
             );
             rememberBrandIfValid(correction.marca());
             saved++;

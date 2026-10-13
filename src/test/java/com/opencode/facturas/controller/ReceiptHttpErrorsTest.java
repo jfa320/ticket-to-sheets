@@ -2,6 +2,9 @@ package com.opencode.facturas.controller;
 
 import com.opencode.facturas.service.OcrService;
 import com.opencode.facturas.service.ReceiptParserService;
+import com.opencode.facturas.service.ExtractionBusyException;
+import com.opencode.facturas.service.OcrUnavailableException;
+import org.springframework.mock.web.MockMultipartFile;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -9,6 +12,8 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -37,5 +42,24 @@ class ReceiptHttpErrorsTest {
         mvc.perform(multipart("/api/receipts/extract")).andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("Subi una imagen o PDF de la factura."));
         verifyNoInteractions(ocr, parser);
+    }
+
+    @Test void overlappingExtractionReturns429WithRecoveryMessage() throws Exception {
+        when(ocr.extract(any())).thenThrow(new ExtractionBusyException());
+        mvc.perform(multipart("/api/receipts/extract")
+                        .file(new MockMultipartFile("file", "ticket.png", "image/png", new byte[]{1})))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.message").value("Ya hay una factura en procesamiento. Esperá a que termine y reintentá."))
+                .andExpect(jsonPath("$.requestId").isNotEmpty());
+        verifyNoInteractions(parser);
+    }
+
+    @Test void pendingModelsReturn503InsteadOfGenericProcessingError() throws Exception {
+        when(ocr.extract(any())).thenThrow(new OcrUnavailableException("El OCR está preparando los modelos.", null));
+        mvc.perform(multipart("/api/receipts/extract")
+                        .file(new MockMultipartFile("file", "ticket.png", "image/png", new byte[]{1})))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.message").value("El OCR está preparando los modelos."));
+        verifyNoInteractions(parser);
     }
 }

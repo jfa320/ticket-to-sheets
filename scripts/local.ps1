@@ -1,6 +1,7 @@
 ﻿param(
     [ValidateSet('Start', 'Stop')][string]$Action = 'Start',
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [ValidateRange(1, 3600)][int]$OcrStartupTimeoutSec = 300
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,9 +14,10 @@ New-Item -ItemType Directory -Force -Path $logRoot, $runtimeRoot | Out-Null
 function Get-LocalServiceProcess([int]$port, [string]$name) {
     $listeners = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
     $record = Join-Path $logRoot "$name.pid"
-    $ids = @($listeners | Select-Object -ExpandProperty OwningProcess)
+    $listeningIds = @($listeners | Select-Object -ExpandProperty OwningProcess)
+    $ids = @($listeningIds)
+    $recordedId = 0
     if (Test-Path -LiteralPath $record) {
-        $recordedId = 0
         if ([int]::TryParse((Get-Content -LiteralPath $record -Raw).Trim(), [ref]$recordedId)) {
             $ids += $recordedId
         }
@@ -34,7 +36,15 @@ function Get-LocalServiceProcess([int]$port, [string]$name) {
                 ((Test-Path -LiteralPath $record) -and $serviceId -eq $recordedId -and
                     $command -match '\bservice\.py(?:"|\s|$)'))
         }
-        if (-not $belongs) { throw "El puerto $port o el PID guardado pertenece a otro proceso. No se detuvo: $serviceId." }
+        if (-not $belongs) {
+            if ($listeningIds -contains $serviceId) {
+                throw "El puerto $port pertenece a otro proceso. No se detuvo: $serviceId."
+            }
+            # Después de un reinicio, Windows puede asignar el PID guardado a otro programa.
+            # Descartar el registro obsoleto sin tocar ese proceso.
+            if ($serviceId -eq $recordedId) { Remove-Item -LiteralPath $record }
+            continue
+        }
         $process
     }
 }
@@ -81,7 +91,10 @@ try {
     }
     if (-not (Test-Path -LiteralPath $buildJar)) { throw 'No se encontró el JAR compilado.' }
 
-    if (-not (Get-OcrHealth)) {
+    $ocrProcess = $null
+    # Un proceso recién lanzado puede estar importando Paddle antes de abrir el puerto.
+    # Reutilizar su PID evita iniciar otra copia durante esa ventana.
+    if (-not (Get-OcrHealth) -and @(Get-LocalServiceProcess 5000 'ocr').Count -eq 0) {
         $python = (Get-Command python.exe -ErrorAction Stop).Source
         $ocrScript = Join-Path $repoRoot 'ocr/service.py'
         $ocrProcess = Start-Process -FilePath $python -ArgumentList ('"' + $ocrScript + '"') `
@@ -92,12 +105,18 @@ try {
     }
     Write-Host 'Esperando los modelos OCR (la primera carga puede tardar)...'
     $ocrReady = $false
-    for ($attempt = 0; $attempt -lt 180; $attempt++) {
+    $ocrWait = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($ocrWait.Elapsed.TotalSeconds -lt $OcrStartupTimeoutSec) {
+        if ($ocrProcess -and $ocrProcess.HasExited) {
+            throw 'El OCR terminó durante el arranque. Revisá logs/ocr-error.log y las dependencias Python.'
+        }
         $health = Get-OcrHealth
         if ($health -and $health.ocrReady) { $ocrReady = $true; break }
         Start-Sleep -Seconds 1
     }
-    if (-not $ocrReady) { throw 'El OCR no está listo. Revisá logs/ocr-error.log.' }
+    if (-not $ocrReady) {
+        throw "El OCR no estuvo listo en $OcrStartupTimeoutSec segundos. Revisá logs/ocr-error.log; si continúa descargando modelos, esperá y volvé a ejecutar el arranque. Podés ampliar la espera con -OcrStartupTimeoutSec."
+    }
 
     $snapshotJar = Join-Path $runtimeRoot ('app-' + [guid]::NewGuid().ToString('N') + '.jar')
     Copy-Item -LiteralPath $buildJar -Destination $snapshotJar
@@ -115,6 +134,9 @@ try {
         -RedirectStandardError (Join-Path $logRoot 'app-error.log') -PassThru
     Set-Content -LiteralPath (Join-Path $logRoot 'app.pid') -Value $appProcess.Id
     for ($attempt = 0; $attempt -lt 30; $attempt++) {
+        if ($appProcess.HasExited) {
+            throw 'La aplicación terminó durante el arranque. Revisá logs/app.log y logs/app-error.log.'
+        }
         try {
             $response = Invoke-WebRequest 'http://127.0.0.1:8080/' -UseBasicParsing -TimeoutSec 2
             if ($response.StatusCode -eq 200) { Write-Host 'App lista: http://localhost:8080'; return }

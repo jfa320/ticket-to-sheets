@@ -40,6 +40,24 @@ class BrandCatalogComponentsTest {
     }
 
     @Test
+    void joinedBrandMatchingRequiresARecognizableProductSuffix() {
+        var matcher = new BrandCatalogMatcher(Set.of("Lucchetti", "Trio", "Pitusas", "Molto"));
+        assertThat(matcher.findJoinedAtStart("LUCCHETTTSPAG500GR")).get()
+                .extracting(BrandCatalog.BrandMatch::brand).isEqualTo("Lucchetti");
+        assertThat(matcher.findJoinedAtStart("TRTOGALLET300GR")).get()
+                .extracting(BrandCatalog.BrandMatch::brand).isEqualTo("Trio");
+        assertThat(matcher.findJoinedAtStart("MOLTOVOTROPRODUCTO")).isEmpty();
+    }
+
+    @Test
+    void aSingleEarlyOcrTypoDoesNotHideAnOtherwiseStrongBrandMatch() {
+        var matcher = new BrandCatalogMatcher(Set.of("Pitusas", "Pepsi"));
+        assertThat(matcher.findFuzzyAtStart("PTTUSAS GALLET300GR")).get()
+                .extracting(BrandCatalog.FuzzyBrandMatch::brand).isEqualTo("Pitusas");
+        assertThat(matcher.findFuzzyAtStart("POETT LIMPIADOR900ML")).isEmpty();
+    }
+
+    @Test
     void catalogStoreCreatesAndSortsJsonCatalog() {
         Path catalogPath = tempDir.resolve("brands.json");
         BrandCatalogStore store = new BrandCatalogStore(new ObjectMapper(), catalogPath);

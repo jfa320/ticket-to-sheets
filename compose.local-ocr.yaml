@@ -1,0 +1,5 @@
+# Solo para ejecutar Spring Boot en la PC y PaddleOCR en Docker.
+services:
+  paddleocr:
+    ports:
+      - "127.0.0.1:5000:5000"

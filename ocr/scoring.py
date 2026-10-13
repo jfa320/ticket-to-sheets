@@ -1,10 +1,11 @@
 import math
 import re
 import unicodedata
+from datetime import date
 
 
 PRICE_PATTERN = re.compile(
-    r"(?:\$?\s*\d+(?:[.,]\d{3})*[.,]\d{2}|\$?\s*\d+[.,]\d{2})"
+    r"(?<![\d.,])\$?\s*\d+(?:[.,]\d{3})*[.,]\d{2}(?![\d.,])"
 )
 STRUCTURAL_TOKENS = (
     "fecha",
@@ -39,6 +40,22 @@ DELIVERY_DATE_PATTERN = re.compile(
     r"sep(?:t(?:iembre)?)?|set(?:iembre)?|oct(?:ubre)?|nov(?:iembre)?|dic(?:iembre)?)\b"
 )
 MIN_EVIDENCE_CONFIDENCE = 0.5
+RECEIPT_DATE = re.compile(r"(?<![a-z])fecha\s*:?\s*(\d{1,2})\s*[/.-]\s*(\d{1,2})\s*[/.-]\s*(\d{2,4})(?!\d)")
+FOOTER = re.compile(r"^(?:subtot|total\b|t0tal\b|tota1\b|recibi)")
+
+
+def valid_receipt_date(text):
+    text = normalize_text(text).replace("o", "0")
+    match = RECEIPT_DATE.search(text)
+    if not match:
+        return False
+    day, month, year = map(int, match.groups())
+    if year < 100:
+        year += 2000
+    try:
+        return date(year, month, day).year >= 2015
+    except ValueError:
+        return False
 
 
 def score_lines(lines):
@@ -55,11 +72,16 @@ def score_lines(lines):
         for line in candidates
     ]
     average_confidence = sum(line_confidence(line) for line in candidates) / len(candidates)
+    footers = [line["top"] for line in candidates if isinstance(line.get("top"), (int, float))
+               and math.isfinite(line["top"]) and FOOTER.search(normalize_text(line["text"]).strip())]
+    footer_top = min(footers) if footers else None
+    body_evidence = [(str(line["text"]).strip().lower(), evidence_weight(line_confidence(line)))
+                     for line in candidates if footer_top is None or line.get("top", footer_top) < footer_top]
 
     score = strongest_evidence((weight for _, weight in evidence), 45) * 3
     score += average_confidence * 24
     score += strongest_evidence((weight for text, weight in evidence if PRICE_PATTERN.search(text)), 35) * 9
-    score += strongest_evidence((weight for text, weight in evidence if looks_like_item_line(text)), 30) * 14
+    score += strongest_evidence((weight for text, weight in body_evidence if looks_like_item_line(text)), 30) * 14
     structural_weights = [
         max((weight for text, weight in evidence if pattern.search(text)), default=0)
         for pattern in STRUCTURAL_PATTERNS.values()
@@ -69,8 +91,14 @@ def score_lines(lines):
     # same products. Cap this bonus so repeated UI text cannot dominate items.
     score += max((weight for text, weight in evidence
                   if DELIVERY_DATE_PATTERN.search(normalize_text(text))), default=0) * 8
+    score += max((weight for text, weight in evidence if valid_receipt_date(text)), default=0) * 16
     score += strongest_evidence((weight for text, weight in evidence if any(char.isdigit() for char in text)), 40) * 2
-    return score
+    # Detached amounts are useful OCR evidence but not complete product rows.
+    # Discount their row/price/digit bonuses and fragmentation so a confident,
+    # tilted reading does not beat aligned descriptions and prices.
+    score -= strongest_evidence((weight for text, weight in evidence if PRICE_PATTERN.fullmatch(text)), 35) * 18
+    # Service selection reserves negative scores for absent/failed readings.
+    return max(0.0, score)
 
 
 def strongest_evidence(weights, limit):

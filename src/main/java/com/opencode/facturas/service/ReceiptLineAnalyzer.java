@@ -19,6 +19,10 @@ final class ReceiptLineAnalyzer {
     );
     private static final Pattern PRICE_ONLY_PATTERN = Pattern.compile("^(\\d+(?:[\\.,]\\d{3})*[\\.,]\\d{2})$");
     private static final Pattern NUMBER_TOKEN_PATTERN = Pattern.compile("\\d+(?:[\\.,]\\d+)*");
+    private static final Pattern IVA_METADATA_PATTERN = Pattern.compile(
+            "(?<![a-z])iva(?:\\b|(?=\\d|contenido|responsable))"
+    );
+    private static final Pattern OCR_DECIMAL = Pattern.compile("(?<![\\p{L}\\d])\\d+(?:[.,]\\d{3})*[.,][0-9oOcC]{2}(?![\\p{L}\\d])");
     private static final List<String> STOP_WORDS = List.of(
             "subtotal", "total", "recibi", "cambio", "tarjeta", "efectivo"
     );
@@ -92,8 +96,17 @@ final class ReceiptLineAnalyzer {
                 || (normalized.contains("neto") && normalized.contains("gravado"));
     }
 
+    boolean isProductFooter(String normalized) {
+        String compact = normalized.replace(" ", "");
+        return compact.startsWith("subtot") || compact.startsWith("total") || compact.startsWith("t0tal")
+                || compact.startsWith("tota1") || compact.startsWith("t0ta1") || compact.startsWith("totai")
+                || compact.startsWith("recibi") || compact.startsWith("apagar");
+    }
+
     boolean containsMetadata(String normalized) {
-        return METADATA_WORDS.stream().anyMatch(normalized::contains);
+        return METADATA_WORDS.stream().anyMatch(word -> word.equals("iva")
+                ? IVA_METADATA_PATTERN.matcher(normalized).find()
+                : normalized.contains(word));
     }
 
     boolean containsStopWord(String normalized) {
@@ -145,21 +158,21 @@ final class ReceiptLineAnalyzer {
     }
 
     boolean isPriceOnly(String value) {
-        return PRICE_ONLY_PATTERN.matcher(value).matches();
+        return PRICE_ONLY_PATTERN.matcher(normalizeMoney(value)).matches();
     }
 
     boolean isMoneyValue(String value) {
-        String trimmed = value.trim();
+        String trimmed = normalizeMoney(value).trim();
         return PRICE_ONLY_PATTERN.matcher(trimmed).matches() || MONEY_PATTERN.matcher(trimmed).matches();
     }
 
     boolean containsMoney(String value) {
-        return MONEY_PATTERN.matcher(value).find();
+        return MONEY_PATTERN.matcher(normalizeMoney(value)).find();
     }
 
     List<String> moneyValues(String value) {
         List<String> values = new ArrayList<>();
-        Matcher matcher = MONEY_PATTERN.matcher(value);
+        Matcher matcher = MONEY_PATTERN.matcher(normalizeMoney(value));
         while (matcher.find()) {
             values.add(matcher.group());
         }
@@ -167,7 +180,7 @@ final class ReceiptLineAnalyzer {
     }
 
     Optional<String> firstMoneyValue(String value) {
-        Matcher matcher = MONEY_PATTERN.matcher(value);
+        Matcher matcher = MONEY_PATTERN.matcher(normalizeMoney(value));
         return matcher.find() ? Optional.of(matcher.group()) : Optional.empty();
     }
 
@@ -177,6 +190,11 @@ final class ReceiptLineAnalyzer {
     }
 
     String removeMoneyValues(String value) {
-        return MONEY_PATTERN.matcher(value).replaceAll(" ");
+        return MONEY_PATTERN.matcher(normalizeMoney(value)).replaceAll(" ");
+    }
+
+    private String normalizeMoney(String value) {
+        return OCR_DECIMAL.matcher(value).replaceAll(match -> match.group().replace('O', '0').replace('o', '0')
+                .replace('C', '0').replace('c', '0'));
     }
 }

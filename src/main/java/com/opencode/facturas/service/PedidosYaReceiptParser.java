@@ -11,9 +11,11 @@ final class PedidosYaReceiptParser {
     private static final Pattern POSSIBLE_QUANTITY_PATTERN = Pattern.compile(
             "(?i)\\b\\d+(?:[\\.,]\\d+)?\\s*(?:x|kg|g|gr|ml|l|un|und|unidad(?:es)?)\\b"
     );
-    private static final Pattern TRAILING_UNITS_PATTERN = Pattern.compile("(?i)\\s+(\\d+)x\\s*$");
-    private static final Pattern UNIT_QUANTITY_PATTERN = Pattern.compile("(?i)\\b(\\d+)x\\s*$");
+    private static final Pattern TRAILING_UNITS_PATTERN = Pattern.compile("(?i)\\s+(\\d+)\\s*x\\s*$");
+    private static final Pattern UNIT_QUANTITY_PATTERN = Pattern.compile("(?i)\\b(\\d+)\\s*x\\s*$");
     private static final Pattern KILOGRAM_QUANTITY_PATTERN = Pattern.compile("(?i)(\\d+(?:[\\.,]\\d+)?)\\s*kg\\b");
+    private static final Pattern CHANGED_WEIGHT_PATTERN = Pattern.compile(
+            "(?i)\\s+(\\d+(?:[.,]\\d+)?\\s*(?:kg|g)\\s*\\d+(?:[.,]\\d+)?\\s*kg)\\s*$");
 
     private final ReceiptLineAnalyzer lineAnalyzer;
 
@@ -33,20 +35,32 @@ final class PedidosYaReceiptParser {
     ParseResult parse(List<String> lines) {
         List<Candidate> candidates = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
+        int start = orderStart(lines);
+        int end = orderEnd(lines, start);
+        boolean precedingQuantities = quantitiesPrecedeProducts(lines, start, end);
+        String pendingQuantity = null;
 
-        for (int index = 0; index < lines.size(); index++) {
-            String line = lineAnalyzer.clean(lines.get(index));
+        for (int index = start; index < end; index++) {
+            String line = cleanProductLine(lines.get(index));
             String normalized = lineAnalyzer.normalize(line);
+            if (isStandaloneQuantity(line)) {
+                if (precedingQuantities) {
+                    pendingQuantity = extractQuantity(line).orElse(null);
+                }
+                continue;
+            }
             Optional<InlineItem> inlineItem = parseInlineItem(line, normalized);
             if (inlineItem.isPresent()) {
                 InlineItem item = inlineItem.get();
                 candidates.add(new Candidate(
                         item.description(),
                         item.price(),
-                        item.quantity(),
+                        precedingQuantities && pendingQuantity != null && extractQuantity(line).isEmpty()
+                                ? pendingQuantity : item.quantity(),
                         lineAnalyzer.isAmbiguous(line, normalized),
                         line
                 ));
+                pendingQuantity = null;
                 continue;
             }
 
@@ -55,28 +69,82 @@ final class PedidosYaReceiptParser {
             }
 
             ProductLine productLine = splitQuantity(line);
-            Optional<String> price = findPriceInFollowingLines(lines, index + 1);
+            Optional<LocatedPrice> price = findPriceInFollowingLines(lines, index + 1, end);
             if (price.isEmpty()) {
-                if (shouldWarnMissingPrice(line, normalized)) {
+                if (pendingQuantity != null || productLine.quantity().isPresent() || shouldWarnMissingPrice(line, normalized)) {
                     warnings.add("Producto posible sin precio: " + line);
                 }
+                pendingQuantity = null;
                 continue;
             }
 
-            String quantity = productLine.quantity().orElse(null);
-            if (quantity == null) {
-                quantity = findQuantityInFollowingLines(lines, index + 1).orElse("1");
+            String quantity = productLine.quantity().orElse(precedingQuantities ? pendingQuantity : null);
+            int consumedThrough = price.get().index();
+            if (quantity == null && !precedingQuantities) {
+                Optional<LocatedQuantity> followingQuantity = findQuantityInFollowingLines(lines, consumedThrough + 1, end);
+                if (followingQuantity.isPresent()) {
+                    quantity = followingQuantity.get().quantity();
+                    consumedThrough = followingQuantity.get().index();
+                }
             }
             candidates.add(new Candidate(
                     productLine.description(),
-                    price.get(),
-                    quantity,
+                    price.get().price(),
+                    quantity == null ? "1" : quantity,
                     lineAnalyzer.isAmbiguous(line, normalized),
                     line
             ));
+            // The price row may include lettering from the package. Consume it
+            // with its description so that lettering cannot become another item.
+            index = consumedThrough;
+            pendingQuantity = null;
         }
 
         return new ParseResult(candidates, warnings);
+    }
+
+    private int orderStart(List<String> lines) {
+        for (int index = 0; index < lines.size(); index++) {
+            if (lineAnalyzer.normalize(lines.get(index)).equals("tu pedido")) {
+                return index + 1;
+            }
+        }
+        return 0;
+    }
+
+    private int orderEnd(List<String> lines, int start) {
+        for (int index = start; index < lines.size(); index++) {
+            String normalized = lineAnalyzer.normalize(lines.get(index));
+            if (normalized.matches("^(?:ver menos|ver mas|notas adicionales\\b.*|tu pago\\b.*|medios de pago\\b.*|detalles? sobre la entrega\\b.*)$")) {
+                return index;
+            }
+        }
+        return lines.size();
+    }
+
+    private boolean quantitiesPrecedeProducts(List<String> lines, int start, int end) {
+        for (int index = start; index < end; index++) {
+            String line = cleanProductLine(lines.get(index));
+            if (isStandaloneQuantity(line)) {
+                return true;
+            }
+            if (isLikelyProductLine(line, lineAnalyzer.normalize(line))) {
+                return false;
+            }
+        }
+        return false;
+    }
+
+    private String cleanProductLine(String line) {
+        // A package image can contribute a spurious zero before the name.
+        // Keep explicit currency amounts, including genuine free products.
+        return lineAnalyzer.clean(line).replaceFirst("^0[.,]0{2}\\s+(?=\\p{L})", "");
+    }
+
+    private boolean isStandaloneQuantity(String line) {
+        return line.matches("(?i)\\d+\\s*x")
+                || (KILOGRAM_QUANTITY_PATTERN.matcher(line).find()
+                && line.replaceAll("(?i)kg|g", "").matches("[0-9.,\\s]+"));
     }
 
     private boolean shouldWarnMissingPrice(String line, String normalized) {
@@ -131,7 +199,9 @@ final class PedidosYaReceiptParser {
             return Optional.empty();
         }
 
-        List<String> prices = lineAnalyzer.moneyValues(line);
+        String withoutChangedWeight = CHANGED_WEIGHT_PATTERN.matcher(line).replaceAll(" ");
+        String withoutKilograms = KILOGRAM_QUANTITY_PATTERN.matcher(withoutChangedWeight).replaceAll(" ");
+        List<String> prices = lineAnalyzer.moneyValues(withoutKilograms);
         if (prices.isEmpty()) {
             return Optional.empty();
         }
@@ -158,24 +228,42 @@ final class PedidosYaReceiptParser {
     }
 
     private boolean isInterfaceLine(String normalized) {
-        return normalized.matches("^(?:entregad[oa]\\b.*|compensacion\\b.*|te acreditamos\\b.*|repetir pedido\\b.*|ir al local|ayuda|ver menos|ver mas|notas adicionales\\b.*)$");
+        return normalized.matches("^(?:entregad[oa]\\b.*|compensacion\\b.*|te acreditamos\\b.*|(?:of )?repetir pedido\\b.*|ir al local|(?:q )?ayuda|opinar|ver menos|ver mas|notas adicionales\\b.*|hubo cambios\\b.*|detalle de los cambios\\b.*|cobro extra\\b.*|veras el cobro extra\\b.*|como veo mi cobro extra\\b.*)$");
     }
 
-    private Optional<String> findPriceInFollowingLines(List<String> lines, int startIndex) {
-        for (int index = startIndex; index < Math.min(lines.size(), startIndex + 3); index++) {
-            Optional<String> price = lineAnalyzer.firstMoneyValue(lines.get(index));
-            if (price.isPresent()) {
-                return price;
+    private Optional<LocatedPrice> findPriceInFollowingLines(List<String> lines, int startIndex, int end) {
+        for (int index = startIndex; index < Math.min(end, startIndex + 3); index++) {
+            String line = lineAnalyzer.clean(lines.get(index));
+            String normalized = lineAnalyzer.normalize(line);
+            if (isStandaloneQuantity(line) || isInterfaceLine(normalized)) {
+                break;
+            }
+            if (normalized.contains("off")) {
+                continue;
+            }
+            Optional<String> price = lineAnalyzer.firstMoneyValue(line);
+            String lettering = lineAnalyzer.removeMoneyValues(line).trim();
+            boolean priceRow = lettering.chars().noneMatch(Character::isLetter)
+                    || (lettering.split("\\s+").length <= 2 && extractQuantity(lettering).isEmpty());
+            if (price.isPresent() && priceRow) {
+                return Optional.of(new LocatedPrice(price.get(), index));
+            }
+            if (isLikelyProductLine(line, normalized)) {
+                break;
             }
         }
         return Optional.empty();
     }
 
-    private Optional<String> findQuantityInFollowingLines(List<String> lines, int startIndex) {
-        for (int index = startIndex; index < Math.min(lines.size(), startIndex + 4); index++) {
-            Optional<String> quantity = extractQuantity(lines.get(index));
-            if (quantity.isPresent()) {
-                return quantity;
+    private Optional<LocatedQuantity> findQuantityInFollowingLines(List<String> lines, int startIndex, int end) {
+        for (int index = startIndex; index < Math.min(end, startIndex + 4); index++) {
+            String line = lineAnalyzer.clean(lines.get(index));
+            if (isStandaloneQuantity(line)) {
+                return Optional.of(new LocatedQuantity(extractQuantity(line).orElseThrow(), index));
+            }
+            String normalized = lineAnalyzer.normalize(line);
+            if (isLikelyProductLine(line, normalized) || isInterfaceLine(normalized)) {
+                break;
             }
         }
         return Optional.empty();
@@ -188,6 +276,10 @@ final class PedidosYaReceiptParser {
                     line.substring(0, unitsMatcher.start()).trim(),
                     Optional.of(unitsMatcher.group(1))
             );
+        }
+        Matcher weightMatcher = CHANGED_WEIGHT_PATTERN.matcher(line);
+        if (weightMatcher.find()) {
+            return new ProductLine(line.substring(0, weightMatcher.start()).trim(), extractQuantity(weightMatcher.group(1)));
         }
         return new ProductLine(line, Optional.empty());
     }
@@ -216,5 +308,11 @@ final class PedidosYaReceiptParser {
     }
 
     private record InlineItem(String description, String price, String quantity) {
+    }
+
+    private record LocatedPrice(String price, int index) {
+    }
+
+    private record LocatedQuantity(String quantity, int index) {
     }
 }

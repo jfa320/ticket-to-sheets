@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Service
 public class OcrService {
@@ -38,6 +39,7 @@ public class OcrService {
     private final long maxImagePixels;
     private final int maxImageSide;
     private final boolean nativePdfTextEnabled;
+    private final AtomicBoolean extractionInProgress = new AtomicBoolean();
 
     @Autowired
     public OcrService(
@@ -47,6 +49,7 @@ public class OcrService {
             @Value("${app.ocr.language:es}") String language,
             @Value("${app.ocr.connect-timeout-ms:5000}") int connectTimeoutMs,
             @Value("${app.ocr.read-timeout-ms:300000}") int readTimeoutMs,
+            @Value("${app.ocr.health-timeout-ms:2000}") int healthTimeoutMs,
             @Value("${app.ocr.max-attempts:3}") int maxAttempts,
             @Value("${app.upload.max-image-pixels:20000000}") long maxImagePixels,
             @Value("${app.upload.max-image-side:10000}") int maxImageSide,
@@ -63,6 +66,7 @@ public class OcrService {
                         language,
                         connectTimeoutMs,
                         readTimeoutMs,
+                        healthTimeoutMs,
                         maxAttempts
                 ),
                 new PdfPageRenderer(PdfPageRenderer.DEFAULT_DPI, maxPdfPages, maxPdfPagePixels),
@@ -99,6 +103,17 @@ public class OcrService {
     }
 
     public OcrResult extract(MultipartFile file) {
+        if (!extractionInProgress.compareAndSet(false, true)) {
+            throw new ExtractionBusyException();
+        }
+        try {
+            return extractFile(file);
+        } finally {
+            extractionInProgress.set(false);
+        }
+    }
+
+    private OcrResult extractFile(MultipartFile file) {
         String filename = file.getOriginalFilename() == null ? "archivo" : file.getOriginalFilename().toLowerCase();
         long startedAt = System.nanoTime();
 

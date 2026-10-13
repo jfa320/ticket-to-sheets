@@ -36,6 +36,10 @@ public class BrandCatalog {
         return matcher.findIn(description);
     }
 
+    public synchronized Optional<BrandMatch> findJoinedAtStart(String description) {
+        return matcher.findJoinedAtStart(description);
+    }
+
     public synchronized Optional<BrandMatch> findAnywhereIn(String description) {
         return matcher.findAnywhereIn(description);
     }

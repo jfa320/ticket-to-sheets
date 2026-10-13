@@ -30,6 +30,11 @@ public class CorrectionMemory {
         return CorrectionMemoryRules.find(entries, storeName, firma);
     }
 
+    public synchronized void upsert(String storeName, String firma, String descripcion, String marca,
+                                    String categoria, String marcaOriginal) {
+        upsert(storeName, firma, descripcion, CorrectionMemoryRules.explicitBrand(marca, marcaOriginal), categoria);
+    }
+
     public synchronized void upsert(String storeName, String firma, String descripcion, String marca, String categoria) {
         String storeClean = CorrectionMemoryRules.clean(storeName);
         String firmaKey = CorrectionMemoryRules.normalize(firma);
@@ -43,6 +48,7 @@ public class CorrectionMemory {
                         && CorrectionMemoryRules.normalize(entry.firma()).equals(firmaKey))
                 .findFirst();
 
+        List<Entry> next = new ArrayList<>(entries);
         if (existing.isPresent()) {
             Entry current = existing.get();
             Entry updated = new Entry(
@@ -54,9 +60,9 @@ public class CorrectionMemory {
                     current.veces() + 1,
                     today
             );
-            entries.set(entries.indexOf(current), updated);
+            next.set(entries.indexOf(current), updated);
         } else {
-            entries.add(new Entry(
+            next.add(new Entry(
                     storeClean,
                     firmaKey,
                     CorrectionMemoryRules.clean(descripcion),
@@ -66,7 +72,9 @@ public class CorrectionMemory {
                     today
             ));
         }
-        store.save(entries);
+        store.save(next);
+        entries.clear();
+        entries.addAll(next);
     }
 
     public record Entry(String store, String firma, String descripcion, String marca, String categoria, int veces, String ultimaVez) {

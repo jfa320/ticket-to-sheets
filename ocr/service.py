@@ -3,6 +3,7 @@ import hashlib
 from io import BytesIO
 import glob
 import logging
+import math
 import os
 import shutil
 import tarfile
@@ -32,6 +33,7 @@ from targeted_retry import refine_detections
 from variant_fusion import fuse_detections
 from preview import build_preview
 from model_paths import model_path_options
+from search_policy import AdaptiveSearch
 
 try:
     paddle.set_flags({"FLAGS_use_mkldnn": False})
@@ -47,9 +49,12 @@ except Exception:
 app = Flask(__name__)
 OCR_CACHE = {}
 OCR_LOCK = threading.Lock()
+OCR_PROCESSING_LOCK = threading.Lock()
 DEFAULT_LANGUAGE = os.environ.get("OCR_DEFAULT_LANGUAGE", "es")
 OCR_MAX_REGION_SIDE = 1400
 logging.basicConfig(level=logging.INFO)
+# Paddle's imports may configure the root logger before basicConfig runs.
+app.logger.setLevel(logging.INFO)
 
 
 def debug_enabled():
@@ -69,6 +74,17 @@ def targeted_retry_enabled():
 
 def variant_fusion_enabled():
     return os.environ.get("OCR_VARIANT_FUSION", "true").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def adaptive_search_enabled():
+    return os.environ.get("OCR_ADAPTIVE_SEARCH", "true").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def search_budget_seconds():
+    value = float(os.environ.get("OCR_SEARCH_BUDGET_SECONDS", "90"))
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError("OCR_SEARCH_BUDGET_SECONDS debe ser un número positivo y finito")
+    return value
 
 
 def create_debug_dir():
@@ -271,6 +287,16 @@ def ocr_image(ocr, image):
 
 def run_best_ocr(image, language, debug_dir=None, preview_sink=None):
     ocr = get_ocr(language)
+    started = time.perf_counter()
+    adaptive = adaptive_search_enabled()
+    budget = search_budget_seconds() if adaptive else None
+    deadline = started + budget if adaptive else None
+    # Leave actual time for the final rereads; previously every difficult photo
+    # exhausted the deadline while enumerating variants and skipped this stage.
+    retry_reserve = min(12.0, budget * .15) if adaptive and targeted_retry_enabled() else 0.0
+    selection_deadline = deadline - retry_reserve if adaptive else None
+    search = AdaptiveSearch()
+    stop_reason = "exhausted"
     best_name = "original"
     best_lines = []
     best_detections = []
@@ -278,46 +304,88 @@ def run_best_ocr(image, language, debug_dir=None, preview_sink=None):
     best_score = -1
     variant_summaries = []
     evidence = []
+    readings = {}
+    ocr_pass_count = 0
     best_metadata = None
     fusion_enabled = variant_fusion_enabled()
 
-    for entry in build_variants(
-        image, debug_dir, save_debug_image, document_corrections=image_corrections_enabled(), with_metadata=True
-    ):
-        name, variant = entry[:2]
-        metadata = dict(entry[2]) if len(entry) > 2 else None
-        save_debug_image(debug_dir, f"variants/{name}.png", variant)
-        try:
-            detections, lines = ocr_image(ocr, variant)
-        except Exception as exc:
-            app.logger.warning("OCR variant '%s' failed: %s", name, exc)
-            variant_summaries.append({"variant": name, "error": str(exc)})
-            continue
-        score = score_lines(lines)
-        if fusion_enabled and metadata:
-            digest = hashlib.sha256(variant.convert("L").tobytes()).hexdigest()
-            metadata["fingerprint"] = (variant.size, digest)
-            evidence.append({"metadata": metadata, "detections": detections})
-        variant_summaries.append({
-            "variant": name,
-            "score": score,
-            "lineCount": len(lines),
-            "detectionCount": len(detections),
-            "preview": " | ".join(line["text"] for line in lines[:8]),
-        })
-        write_debug_json(debug_dir, f"variants/{name}.json", {
-            "variant": name,
-            "score": score,
-            "detections": detections,
-            "lines": lines,
-        })
-        if score > best_score:
-            best_score = score
-            best_lines = lines
-            best_detections = detections
-            best_name = name
-            best_variant = variant
-            best_metadata = metadata
+    options = dict(document_corrections=image_corrections_enabled(), with_metadata=True, geometry_cache={})
+    if adaptive:
+        variants = search.variants(lambda rotation: build_variants(
+            image, debug_dir, save_debug_image, rotations=(rotation,), prioritize_corrections=True, **options
+        ))
+    else:
+        variants = build_variants(image, debug_dir, save_debug_image, **options)
+
+    # Close suspended generators even on early exit, releasing intermediate images.
+    try:
+        for entry in variants:
+            if selection_deadline is not None and time.perf_counter() >= selection_deadline:
+                stop_reason = "time_budget"
+                break
+            name, variant = entry[:2]
+            metadata = dict(entry[2]) if len(entry) > 2 else None
+            save_debug_image(debug_dir, f"variants/{name}.png", variant)
+            variant_started = time.perf_counter()
+            # Exact pixels imply identical OCR coordinates, even when candidates
+            # have different frame labels. Keep their own metadata for fusion.
+            cache_key = (variant.size, hashlib.sha256(variant.convert("RGB").tobytes()).hexdigest()) \
+                if adaptive and metadata else None
+            reused = cache_key is not None and cache_key in readings
+            try:
+                if reused:
+                    detections, lines = readings[cache_key]
+                else:
+                    ocr_pass_count += 1
+                    detections, lines = ocr_image(ocr, variant)
+                    if cache_key is not None:
+                        readings[cache_key] = (detections, lines)
+            except Exception as exc:
+                app.logger.warning("OCR variant '%s' failed: %s", name, exc)
+                variant_summaries.append({"variant": name, "error": str(exc)})
+                continue
+            score = score_lines(lines)
+            duration_ms = round((time.perf_counter() - variant_started) * 1000)
+            app.logger.info("OCR variant '%s': %d ms, %d lines, score %.2f", name, duration_ms, len(lines), score)
+            if (fusion_enabled or adaptive) and metadata:
+                digest = hashlib.sha256(variant.convert("L").tobytes()).hexdigest()
+                metadata["fingerprint"] = (variant.size, digest)
+                if fusion_enabled:
+                    evidence.append({"metadata": metadata, "detections": detections})
+            variant_summaries.append({
+                "variant": name,
+                "score": score,
+                "durationMs": duration_ms,
+                "reusedReading": reused,
+                "lineCount": len(lines),
+                "detectionCount": len(detections),
+                "preview": " | ".join(line["text"] for line in lines[:8]),
+            })
+            write_debug_json(debug_dir, f"variants/{name}.json", {
+                "variant": name,
+                "score": score,
+                "detections": detections,
+                "lines": lines,
+            })
+            if score > best_score:
+                best_score = score
+                best_lines = lines
+                best_detections = detections
+                best_name = name
+                best_variant = variant
+                best_metadata = metadata
+            if adaptive:
+                search.observe(lines, score, metadata)
+                if search.complete:
+                    stop_reason = "consistent_readings"
+                    break
+                if time.perf_counter() >= selection_deadline:
+                    stop_reason = "time_budget"
+                    break
+    finally:
+        close = getattr(variants, "close", None)
+        if close:
+            close()
 
     if best_score < 0:
         raise RuntimeError("PaddleOCR fallo en todas las variantes de imagen. Revisa tamaño/formato de la foto.")
@@ -339,8 +407,18 @@ def run_best_ocr(image, language, debug_dir=None, preview_sink=None):
     retry_summary = {"enabled": targeted_retry_enabled()}
     if retry_summary["enabled"] and best_variant is not None:
         try:
+            retry_options = {"should_continue": lambda: time.perf_counter() < deadline} if adaptive else {}
+            # Full-frame variants share an exact rotation/scale with the upload.
+            # Reread original pixels rather than enlarging an already downscaled
+            # image. Cropped/perspective frames retain their own pixels and boxes.
+            frame = best_metadata.get("frame", "") if best_metadata else ""
+            if frame.startswith("full:"):
+                rotation = int(frame.split(":", 1)[1])
+                detail = image if rotation == 0 else image.rotate(rotation, expand=True)
+                if abs(detail.width / detail.height - best_variant.width / best_variant.height) < .01:
+                    retry_options["detail_image"] = detail
             refined, statistics = refine_detections(
-                best_variant, best_detections, lambda region: recognize_block(ocr, region)
+                best_variant, best_detections, lambda region: recognize_block(ocr, region), **retry_options
             )
             retry_summary.update(statistics)
             if statistics["acceptedRegions"]:
@@ -362,12 +440,18 @@ def run_best_ocr(image, language, debug_dir=None, preview_sink=None):
 
     preview = " | ".join(line["text"] for line in best_lines[:12])
     app.logger.info("Selected OCR variant '%s' with score %.2f and %d lines: %s", best_name, best_score, len(best_lines), preview)
+    search_summary = {"adaptive": adaptive, "stopReason": stop_reason, "variantCount": len(variant_summaries),
+                      "ocrPassCount": ocr_pass_count,
+                      "durationMs": round((time.perf_counter() - started) * 1000)}
+    app.logger.info("OCR search finished: %s, %d variants, %d ms", stop_reason,
+                    search_summary["variantCount"], search_summary["durationMs"])
 
     if debug_dir:
         if best_variant is not None:
             save_debug_image(debug_dir, "selected.png", best_variant)
             save_debug_image(debug_dir, "detections-overlay.png", draw_overlay(best_variant, best_detections))
         write_debug_json(debug_dir, "variants-summary.json", variant_summaries)
+        write_debug_json(debug_dir, "search-summary.json", search_summary)
         write_debug_json(debug_dir, "targeted-retry.json", retry_summary)
         write_debug_json(debug_dir, "variant-fusion.json", fusion_summary)
         write_debug_json(debug_dir, "detections.json", {
@@ -389,6 +473,12 @@ def run_best_ocr(image, language, debug_dir=None, preview_sink=None):
 def ocr_endpoint():
     if not request.data:
         return jsonify({"error": "No se recibio imagen"}), 400
+
+    if DEFAULT_LANGUAGE not in OCR_CACHE:
+        return jsonify({"error": "El OCR está preparando los modelos. Esperá a que termine y reintentá."}), 503
+
+    if not OCR_PROCESSING_LOCK.acquire(blocking=False):
+        return jsonify({"error": "Ya hay una factura en procesamiento. Esperá a que termine y reintentá."}), 429
 
     language = request.headers.get("X-OCR-Language", "es")
 
@@ -419,13 +509,18 @@ def ocr_endpoint():
     except Exception as exc:
         app.logger.error("OCR request failed: %s\n%s", exc, traceback.format_exc())
         return jsonify({"error": str(exc)}), 500
+    finally:
+        OCR_PROCESSING_LOCK.release()
 
 
 @app.get("/health")
 def health_endpoint():
-    return jsonify({"status": "ok", "ocrReady": DEFAULT_LANGUAGE in OCR_CACHE}), 200
+    return jsonify({
+        "status": "ok", "ocrReady": DEFAULT_LANGUAGE in OCR_CACHE,
+        "ocrBusy": OCR_PROCESSING_LOCK.locked(),
+    }), 200
 
 
 if __name__ == "__main__":
     threading.Thread(target=warmup_default_ocr, daemon=True).start()
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host=os.environ.get("OCR_BIND_HOST", "127.0.0.1"), port=5000)

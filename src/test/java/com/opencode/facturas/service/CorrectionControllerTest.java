@@ -51,12 +51,32 @@ class CorrectionControllerTest {
     }
 
     @Test
-    void genericOriginalDoesNotSaveCorrection() {
+    void genericOriginalLearnsTheCorrectedDescriptionAndBrand() {
         CorrectionsRequest request = new CorrectionsRequest(
                 "Los Tres Corazones",
                 List.of(new CorrectionsRequest.Correction(
                         "articulo especial 1200", "Articulo", "Molto", "Supermercado", "Genérico")));
 
-        assertEquals(0, controller.learn(request).saved());
+        assertEquals(1, controller.learn(request).saved());
+        assertEquals("Molto", memory.find("Los Tres Corazones", "articulo especial 1200").marca());
+        assertEquals("Articulo", memory.find("Los Tres Corazones", "articulo especial 1200").descripcion());
+    }
+
+    @Test
+    void nameAndCategoryAreLearnedEvenWhenTheBrandIsStillGeneric() {
+        var request = new CorrectionsRequest("Comercio prueba", List.of(new CorrectionsRequest.Correction(
+                "jabon neutro 500g", "Jabón neutro 500g", "Genérico", "Limpieza", "Genérico")));
+        assertEquals(1, controller.learn(request).saved());
+        assertEquals("Jabón neutro 500g", memory.find("Comercio prueba", "jabon neutro 500g").descripcion());
+        assertEquals("", memory.find("Comercio prueba", "jabon neutro 500g").marca());
+        assertEquals("Limpieza", memory.find("Comercio prueba", "jabon neutro 500g").categoria());
+    }
+
+    @Test
+    void anExplicitGenericCorrectionSuppressesAPreviouslyMisrecognizedBrandOnTheNextReceipt() {
+        var request = new CorrectionsRequest("Comercio prueba", List.of(new CorrectionsRequest.Correction(
+                "papas fritas un", "Papas fritas", "Genérico", "Supermercado", "Marca Falsa")));
+        assertEquals(1, controller.learn(request).saved());
+        assertEquals("Sin marca", memory.find("Comercio prueba", "papas fritas un").marca());
     }
 }

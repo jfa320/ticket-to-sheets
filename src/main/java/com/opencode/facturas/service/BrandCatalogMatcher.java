@@ -6,9 +6,13 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.regex.Pattern;
 import java.util.Set;
 
 class BrandCatalogMatcher {
+
+    private static final Pattern JOINED_PRODUCT = Pattern.compile(
+            "^(?:spag|sphg|gal|jabon|jab0n|papel|pan|lim[opn]|arroz|manz|cafe|crem|may|vinag|gran|raviol|pure|salchi|fide).*");
 
     private final Set<String> brands;
 
@@ -39,6 +43,21 @@ class BrandCatalogMatcher {
                 .max(Comparator.comparingInt(match -> compact(match.normalizedAlias()).length()));
     }
 
+    Optional<BrandCatalog.BrandMatch> findJoinedAtStart(String description) {
+        String first = normalize(description).split(" ")[0];
+        return brands.stream().flatMap(brand -> aliasesFor(brand).stream().map(alias -> {
+                    String key = compact(normalize(alias));
+                    if (key.length() < 3 || first.length() < key.length() + 3) return null;
+                    String prefix = first.substring(0, key.length());
+                    String suffix = first.substring(key.length());
+                    if (!JOINED_PRODUCT.matcher(suffix).matches()
+                            || commonPrefixLength(comparisonKey(prefix), comparisonKey(key)) < 1
+                            || similarity(comparisonKey(prefix), comparisonKey(key)) < 75) return null;
+                    return new BrandCatalog.BrandMatch(brand, prefix);
+                })).filter(java.util.Objects::nonNull)
+                .max(Comparator.comparingInt(match -> match.normalizedAlias().length()));
+    }
+
     Optional<BrandCatalog.FuzzyBrandMatch> findFuzzyAtStart(String description) {
         Optional<BrandCatalog.FuzzyBrandMatch> best = findBestFuzzyAtStart(description);
         if (best.isEmpty()) {
@@ -47,7 +66,8 @@ class BrandCatalogMatcher {
         String firstToken = comparisonKey(normalize(description).split(" ")[0]);
         String alias = comparisonKey(best.get().normalizedAlias());
         int requiredPrefix = Math.max(2, (int) Math.ceil(Math.max(firstToken.length(), alias.length()) * 0.2));
-        return commonPrefixLength(firstToken, alias) >= requiredPrefix ? best : Optional.empty();
+        int prefixLength = commonPrefixLength(firstToken, alias);
+        return prefixLength >= requiredPrefix || best.get().percentage() > 80 && prefixLength >= 1 ? best : Optional.empty();
     }
 
     Optional<BrandCatalog.FuzzyBrandMatch> findBestFuzzyAtStart(String description) {

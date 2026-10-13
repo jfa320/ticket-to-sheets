@@ -73,18 +73,39 @@ def _illumination_candidates(image, suffix):
         LOGGER.warning("Skipping illumination candidates: %s", exc)
 
 
-def build_variants(image, debug_dir=None, save_debug_image=None, document_corrections=True, with_metadata=False):
+def build_variants(image, debug_dir=None, save_debug_image=None, document_corrections=True, with_metadata=False,
+                   rotations=(0, 90, 270, 180), prioritize_corrections=False, geometry_cache=None):
     """Yield one candidate at a time; debug output is supplied by the caller."""
     source = image if image.mode == "RGB" else image.convert("RGB")
-    corrected = None
-    geometry_checked = False
+    geometry_cache = {} if geometry_cache is None else geometry_cache
 
     def pack(name, candidate, frame):
         if with_metadata:
             return name, candidate, {"frame": frame, "size": candidate.size}
         return name, candidate
 
-    for rotation in (0, 90, 270, 180):
+    def document_candidates(bounded_original, rotation, suffix, full_frame, geometry_frame):
+        # Always include the full frame: brightness cropping can lose shadowed text.
+        for name, candidate in _illumination_candidates(bounded_original, suffix):
+            yield pack(name, candidate, full_frame)
+        if not geometry_cache.get("checked"):
+            geometry_cache["checked"] = True
+            try:
+                corrected = correct_document_geometry(limit_image_size(source))
+                if corrected is not None:
+                    corrected = limit_image_size(corrected)
+            except Exception as exc:
+                corrected = None
+                LOGGER.warning("Skipping document geometry candidate: %s", exc)
+            geometry_cache["image"] = corrected
+        corrected = geometry_cache.get("image")
+        if corrected is not None:
+            corrected_oriented = corrected if rotation == 0 else corrected.rotate(rotation, expand=True)
+            yield pack(f"geometry-{suffix}", corrected_oriented, geometry_frame)
+            for name, candidate in _illumination_candidates(corrected_oriented, f"geometry-{suffix}"):
+                yield pack(name, candidate, geometry_frame)
+
+    for rotation in rotations:
         oriented = source if rotation == 0 else source.rotate(rotation, expand=True)
         suffix = "original" if rotation == 0 else f"rot{rotation}"
 
@@ -92,6 +113,9 @@ def build_variants(image, debug_dir=None, save_debug_image=None, document_correc
         bounded_original = limit_image_size(oriented)
         full_frame, crop_frame, geometry_frame = f"full:{rotation}", f"crop:{rotation}", f"geometry:{rotation}"
         yield pack(f"original-{suffix}", bounded_original, full_frame)
+
+        if document_corrections and prioritize_corrections:
+            yield from document_candidates(bounded_original, rotation, suffix, full_frame, geometry_frame)
 
         base = limit_image_size(crop_receipt_region(oriented))
         yield pack(f"cropped-{suffix}", base, crop_frame)
@@ -129,23 +153,6 @@ def build_variants(image, debug_dir=None, save_debug_image=None, document_correc
         yield pack(f"small-{suffix}", small, crop_frame)
         yield pack(f"small-gray-{suffix}", ImageOps.grayscale(small), crop_frame)
 
-        if document_corrections:
-            # A brightness-based crop may exclude shadowed paper and its text.
-            for name, candidate in _illumination_candidates(bounded_original, suffix):
-                yield pack(name, candidate, full_frame)
-            if not geometry_checked:
-                geometry_checked = True
-                try:
-                    corrected = correct_document_geometry(bounded_original)
-                    if corrected is not None:
-                        corrected = limit_image_size(corrected)
-                except Exception as exc:
-                    corrected = None
-                    LOGGER.warning("Skipping document geometry candidate: %s", exc)
-            if corrected is not None:
-                corrected_oriented = corrected if rotation == 0 else corrected.rotate(rotation, expand=True)
-                yield pack(f"geometry-{suffix}", corrected_oriented, geometry_frame)
-                for name, candidate in _illumination_candidates(corrected_oriented, f"geometry-{suffix}"):
-                    yield pack(name, candidate, geometry_frame)
-                del corrected_oriented
+        if document_corrections and not prioritize_corrections:
+            yield from document_candidates(bounded_original, rotation, suffix, full_frame, geometry_frame)
         del base, small, oriented, bounded_original

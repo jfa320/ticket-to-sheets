@@ -213,7 +213,14 @@
                     <tbody id="itemsBody"></tbody>
                 </table>
             </div>
-            <div class="items-total">
+            <div id="discountsPanel" class="discounts-panel hidden">
+                <h3>Bonificaciones</h3>
+                <ul id="discountsList"></ul>
+                <p class="helper">Las bonificaciones marcadas se copian y cargan como filas de “Descuento”, con importe negativo. Revisalas si eliminás productos.</p>
+                <div class="items-total"><span>Subtotal sin descuentos</span><strong id="subtotalValue">$ 0,00</strong></div>
+                <div class="items-total"><span>Descuentos aplicados</span><strong id="discountTotalValue">$ 0,00</strong></div>
+            </div>
+            <div class="items-total" aria-live="polite" aria-atomic="true">
                 <span>Total calculado</span>
                 <strong id="totalValue">$ 0,00</strong>
             </div>
@@ -270,6 +277,6 @@
     <div id="filePreviewContent" class="file-preview-content"></div>
 </dialog>
 
-<script type="module" src="/app.js?v=15"></script>
+<script type="module" src="/app.js?v=18"></script>
 </body>
 </html>

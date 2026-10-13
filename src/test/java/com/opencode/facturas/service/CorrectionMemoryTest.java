@@ -89,4 +89,23 @@ class CorrectionMemoryTest {
 
         assertEquals("Molto", memory.find("LTC", "molto jardiner 340gr").marca());
     }
+
+    @Test
+    void recognizesOcrTyposAndTheCorrectedNameAfterRestart() {
+        memory.upsert("LTC", "marca prueba jabon neutro 500g", "Jabón líquido suave 500gr", "Marca Prueba", "Limpieza");
+        CorrectionMemory reloaded = new CorrectionMemory(new ObjectMapper(), memoryPath);
+        assertNotNull(reloaded.find("LTC", "marca prueba jahon neulro 500g"));
+        assertNotNull(reloaded.find("LTC", "jabon liquido suave 500g marca prueba"));
+        assertNull(reloaded.find("LTC", "jabon liquido suave 1000g marca prueba"));
+        assertNull(reloaded.find("Otro comercio", "marca prueba jahon neulro 500g"));
+    }
+
+    @Test
+    void similarMemoryDoesNotMixSizesFlavorsOrCompetingCorrections() {
+        memory.upsert("LTC", "marca prueba jabon neutro 500g", "Jabón neutro 500g", "Marca Prueba", "Limpieza");
+        assertNull(memory.find("LTC", "marca prueba jabon neutro 1000g"));
+        assertNull(memory.find("LTC", "marca prueba jabon neutro 500g light"));
+        memory.upsert("LTC", "marca prueba jabon neulro 500g", "Jabón otro 500g", "Otra Marca", "Otros");
+        assertNull(memory.find("LTC", "marca prueba jabon neuuro 500g"));
+    }
 }

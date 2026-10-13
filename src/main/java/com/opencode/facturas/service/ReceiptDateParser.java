@@ -19,7 +19,7 @@ final class ReceiptDateParser {
             List.of("sep", "sept", "set", "septiembre", "setiembre"),
             List.of("oct", "octubre"), List.of("nov", "noviembre"), List.of("dic", "diciembre"));
     private static final Pattern TEXT_DATE_PATTERN = Pattern.compile(
-            "(?<![a-z0-9])([0-9o]{1,2})\\s+(?:de\\s+)?("
+            "(?<![a-z0-9])([0-9o]{1,2})\\s*(?:de\\s*)?("
                     + MONTH_NAMES.stream().flatMap(List::stream).collect(java.util.stream.Collectors.joining("|"))
                     + ")(?![a-z])(?:\\s+(?:de\\s+)?(\\d{4})(?!\\d))?");
     private static final Pattern DELIVERY_LABEL = Pattern.compile("\\bentregad[oa]\\b");

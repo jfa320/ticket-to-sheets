@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile
     container_name: facturas-app
     environment:
+      SERVER_ADDRESS: 0.0.0.0
       APP_OCR_ENDPOINT: http://paddleocr:5000/ocr
       APP_OCR_HEALTH_ENDPOINT: http://paddleocr:5000/health
       APP_OCR_LANGUAGE: es
@@ -15,7 +16,7 @@ services:
       TZ: America/Argentina/Buenos_Aires
       JAVA_TOOL_OPTIONS: -Duser.timezone=America/Argentina/Buenos_Aires
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - ./data:/app/data
     depends_on:
@@ -30,6 +31,7 @@ services:
     container_name: facturas-paddleocr
     environment:
       OCR_DEFAULT_LANGUAGE: es
+      OCR_BIND_HOST: 0.0.0.0
       TZ: America/Argentina/Buenos_Aires
       FLAGS_use_mkldnn: "0"
       FLAGS_use_onednn: "0"
@@ -41,6 +43,8 @@ services:
       OCR_IMAGE_CORRECTIONS: ${OCR_IMAGE_CORRECTIONS:-true}
       OCR_TARGETED_RETRY: ${OCR_TARGETED_RETRY:-true}
       OCR_VARIANT_FUSION: ${OCR_VARIANT_FUSION:-true}
+      OCR_ADAPTIVE_SEARCH: ${OCR_ADAPTIVE_SEARCH:-true}
+      OCR_SEARCH_BUDGET_SECONDS: ${OCR_SEARCH_BUDGET_SECONDS:-90}
       OCR_DEBUG_DIR: /app/debug
     expose:
       - "5000"

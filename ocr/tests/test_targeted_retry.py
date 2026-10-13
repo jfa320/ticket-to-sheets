@@ -33,6 +33,72 @@ def ink_detection(region, text="1200,00", confidence=0.94):
 
 
 class TargetedRetryTest(unittest.TestCase):
+    def test_native_pixels_are_reread_but_boxes_remain_in_the_selected_coordinate_frame(self):
+        selected = image_with_boxes()
+        native = selected.resize((600, 600), Image.Resampling.NEAREST)
+        native.putpixel((120, 100), (0, 180, 0))
+        seen = []
+        def recognize(region):
+            pixels = np.asarray(region).astype(int)
+            seen.append(bool(np.any(pixels[:, :, 1] > pixels[:, :, 0] + 80)))
+            return [ink_detection(region, "1200,00", .99)]
+        original = detection("1200,08")
+        result, _ = refine_detections(selected, [original], recognize, detail_image=native)
+        self.assertEqual([True, True], seen)
+        self.assertEqual(original["box"], result[0]["box"])
+        self.assertEqual("1200,00", result[0]["text"])
+
+    def test_price_with_high_initial_confidence_can_be_reread_with_stronger_two_read_consensus(self):
+        original = detection("2800,00", confidence=.946)
+        result, summary = refine_detections(image_with_boxes(), [original],
+                                            lambda region: [ink_detection(region, "2600,00", .99)])
+        self.assertEqual("2600,00", result[0]["text"])
+        self.assertEqual(1, summary["acceptedRegions"])
+        self.assertEqual("2800,00", original["text"])
+
+    def test_decimal_letter_zero_can_be_corrected_without_losing_a_price_token(self):
+        result, summary = refine_detections(image_with_boxes(), [detection("3400,C0")],
+                                            lambda region: [ink_detection(region, "3400,00", .99)])
+        self.assertEqual("3400,00", result[0]["text"])
+        self.assertEqual(1, summary["acceptedRegions"])
+
+    def test_high_confidence_price_requires_both_stronger_confidence_and_consensus(self):
+        original = detection("2800,00", confidence=.946)
+        for confidence in (.94, .96, .975):
+            with self.subTest(confidence=confidence):
+                result, summary = refine_detections(image_with_boxes(), [original],
+                                                    lambda region: [ink_detection(region, "2600,00", confidence)])
+                self.assertEqual(original, result[0])
+                self.assertEqual(0, summary["acceptedRegions"])
+
+    def test_truncated_date_is_reread_before_other_uncertain_text_and_must_be_valid(self):
+        boxes = ((40, 40, 180, 60), (40, 110, 180, 130))
+        original = [detection("TEXTO DUDOSO", boxes[0], .4), detection("Fecha25/09/02", boxes[1], .93)]
+        result, summary = refine_detections(image_with_boxes(boxes), original,
+                                            lambda region: [ink_detection(region, "Fecha25/09/2026", .99)], max_regions=1)
+        self.assertEqual("TEXTO DUDOSO", result[0]["text"])
+        self.assertEqual("Fecha25/09/2026", result[1]["text"])
+        self.assertEqual(1, summary["acceptedRegions"])
+
+    def test_expired_budget_skips_rereads_and_retains_original(self):
+        original = [detection("1200,08")]
+        calls = []
+        result, summary = refine_detections(image_with_boxes(), original, lambda region: calls.append(region),
+                                            should_continue=lambda: False)
+        self.assertEqual(original, result)
+        self.assertEqual([], calls)
+        self.assertEqual(0, summary["ocrCalls"])
+
+    def test_budget_expiring_between_reads_never_accepts_single_read(self):
+        original = [detection("1200,08")]
+        permitted = iter([True, True, False])
+        result, summary = refine_detections(image_with_boxes(), original,
+                                            lambda region: [ink_detection(region)],
+                                            should_continue=lambda: next(permitted))
+        self.assertEqual(original, result)
+        self.assertEqual(1, summary["ocrCalls"])
+        self.assertEqual(0, summary["acceptedRegions"])
+
     def test_consensus_corrects_price_with_confidence_gain_and_preserves_original_geometry(self):
         image = image_with_boxes()
         original = detection("1200,08")
@@ -146,7 +212,7 @@ class TargetedRetryTest(unittest.TestCase):
     def test_confidence_must_be_valid_low_original_and_high_improved_with_gain(self):
         for value in (None, "0.6", True, float("nan"), float("inf"), -0.1, 1.1, 0.8, 0.99):
             with self.subTest(value=value):
-                original = [detection("1200,08", confidence=value)]
+                original = [detection("LECH3 1200,08", confidence=value)]
                 result, summary = refine_detections(image_with_boxes(), original, lambda _: self.fail("ineligible"))
                 self.assertIs(original[0], result[0])
                 self.assertEqual(0, summary["ocrCalls"])

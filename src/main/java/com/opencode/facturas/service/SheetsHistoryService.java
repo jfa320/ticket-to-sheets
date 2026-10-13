@@ -7,6 +7,7 @@ import com.opencode.facturas.model.SheetsHistoryModels.*;
 import com.opencode.facturas.model.SheetsModels.ConfigReference;
 import com.opencode.facturas.model.SheetsModels.Settings;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -14,6 +15,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Service
 public class SheetsHistoryService {
@@ -24,24 +26,38 @@ public class SheetsHistoryService {
     private final GoogleSheetsClient client;
     private final StoreNameMapper stores;
     private final Path path;
+    private final Path localPath;
     private Snapshot snapshot;
+    private Snapshot localSnapshot;
     private HistoryProductMatcher matcher;
     private String loadError = "";
 
+    @Autowired
     public SheetsHistoryService(ObjectMapper mapper, SheetsConfigStore config, GoogleSheetsClient client,
                                 StoreNameMapper stores,
-                                @Value("${app.sheets.history-path:data/sheets-history.json}") String path) {
+                                @Value("${app.sheets.history-path:data/sheets-history.json}") String path,
+                                @Value("${app.sheets.local-history-path:data/local-history.json}") String localPath) {
         this.mapper = mapper; this.config = config; this.client = client; this.stores = stores; this.path = Path.of(path);
+        this.localPath = Path.of(localPath);
+    }
+
+    public SheetsHistoryService(ObjectMapper mapper, SheetsConfigStore config, GoogleSheetsClient client,
+                                StoreNameMapper stores, String path) {
+        this(mapper, config, client, stores, path, Path.of(path).resolveSibling("local-history.json").toString());
     }
 
     public synchronized HistoryStatus status() {
         load();
-        boolean active = active();
+        boolean active = active() || localSnapshot.enabled();
         String message = !loadError.isBlank() ? loadError : active ? "El historial se usa en las próximas extracciones."
                 : snapshot.enabled() ? "El catálogo guardado pertenece a otro archivo o fila de encabezados. Actualizá el historial para este destino."
                 : "El historial está desactivado.";
-        return new HistoryStatus(active, snapshot.spreadsheetId(), snapshot.updatedAt(), snapshot.rowCount(),
-                snapshot.products().size(), snapshot.sheets(), snapshot.skippedSheets(), message);
+        List<Snapshot> catalogs = catalogs();
+        return new HistoryStatus(active, active() ? snapshot.spreadsheetId() : "",
+                catalogs.stream().map(Snapshot::updatedAt).max(String::compareTo).orElse(""),
+                catalogs.stream().mapToInt(Snapshot::rowCount).sum(),
+                products(catalogs).size(), catalogs.stream().flatMap(s -> s.sheets().stream()).distinct().toList(),
+                catalogs.stream().flatMap(s -> s.skippedSheets().stream()).distinct().toList(), message);
     }
 
     public synchronized HistoryStatus sync(ConfigReference expected) {
@@ -101,14 +117,42 @@ public class SheetsHistoryService {
     }
 
     public synchronized HistoryStatus disable() {
+        load();
+        try { AtomicJsonFile.save(mapper, localPath, Snapshot.empty()); }
+        catch (IOException ex) { throw new IllegalStateException("No se pudo desactivar el historial local.", ex); }
+        localSnapshot = Snapshot.empty();
         save(Snapshot.empty());
         return status();
     }
 
     public synchronized List<ReceiptItem> enrich(List<ReceiptItem> items, List<String> warnings) {
         load();
-        if (!active()) return items;
+        if (!active() && !localSnapshot.enabled()) return items;
+        matcher = new HistoryProductMatcher(products(catalogs()));
         return items.stream().map(item -> matcher.enrich(item, warnings)).toList();
+    }
+
+    public synchronized Optional<BrandCatalog.BrandMatch> findBrandIn(String storeName, String description) {
+        load();
+        Set<String> brands = products(catalogs()).stream()
+                .filter(p -> HistoryProductMatcher.normalize(p.comercio()).equals(HistoryProductMatcher.normalize(storeName)))
+                .map(Product::marca).filter(b -> !HistoryProductMatcher.generic(HistoryProductMatcher.normalize(b)))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        BrandCatalogMatcher historical = new BrandCatalogMatcher(brands);
+        return historical.findIn(description).or(() -> historical.findJoinedAtStart(description));
+    }
+
+    private List<Snapshot> catalogs() {
+        List<Snapshot> result = new ArrayList<>();
+        if (localSnapshot.enabled()) result.add(localSnapshot);
+        if (active()) result.add(snapshot);
+        return result;
+    }
+
+    private List<Product> products(List<Snapshot> catalogs) {
+        return catalogs.stream().flatMap(s -> s.products().stream()).map(p ->
+                new Product(p.descripcion(), p.marca(), stores.resolve(List.of(p.comercio()), p.comercio()), p.categoria()))
+                .distinct().toList();
     }
 
     private boolean active() {
@@ -122,26 +166,36 @@ public class SheetsHistoryService {
     private void load() {
         if (snapshot != null) return;
         try {
-            if (Files.exists(path) && Files.size(path) > 16000000) throw new IOException("Historical cache too large");
-            Snapshot loaded = AtomicJsonFile.loadOrRecover(mapper, path, mapper.constructType(Snapshot.class), Snapshot.empty());
-            if (loaded == null || loaded.products() == null || loaded.sheets() == null || loaded.skippedSheets() == null
-                    || loaded.spreadsheetId() == null || loaded.updatedAt() == null || loaded.rowCount() < 0
-                    || loaded.products().size() > MAX_CELLS / 4 || loaded.headerRow() < 1 || loaded.headerRow() > 1000)
-                throw new IllegalStateException();
-            for (Product product : loaded.products()) {
-                if (product == null || !validText(product.descripcion()) || product.descripcion().isBlank()
-                        || !validText(product.marca()) || !validText(product.comercio()) || product.comercio().isBlank()
-                        || !validText(product.categoria())) throw new IllegalStateException();
-            }
-            snapshot = loaded;
+            snapshot = readSnapshot(path);
         } catch (IOException | RuntimeException ignored) {
             snapshot = Snapshot.empty();
             loadError = "No se pudo leer el catálogo local. Actualizá el historial para repararlo; la extracción sigue disponible.";
         }
+        try { localSnapshot = readSnapshot(localPath); }
+        catch (IOException | RuntimeException ignored) {
+            localSnapshot = Snapshot.empty();
+            loadError = "No se pudo leer el historial local. Volvé a importar el Excel; la extracción sigue disponible.";
+        }
         matcher = new HistoryProductMatcher(snapshot.products());
     }
 
+    private Snapshot readSnapshot(Path source) throws IOException {
+        if (Files.exists(source) && Files.size(source) > 16000000) throw new IOException("Historical cache too large");
+        Snapshot loaded = AtomicJsonFile.loadOrRecover(mapper, source, mapper.constructType(Snapshot.class), Snapshot.empty());
+        if (loaded == null || loaded.products() == null || loaded.sheets() == null || loaded.skippedSheets() == null
+                || loaded.spreadsheetId() == null || loaded.updatedAt() == null || loaded.rowCount() < 0
+                || loaded.products().size() > MAX_CELLS / 4 || loaded.headerRow() < 1 || loaded.headerRow() > 1000)
+            throw new IllegalStateException();
+        for (Product product : loaded.products()) {
+            if (product == null || !validText(product.descripcion()) || product.descripcion().isBlank()
+                    || !validText(product.marca()) || !validText(product.comercio()) || product.comercio().isBlank()
+                    || !validText(product.categoria())) throw new IllegalStateException();
+        }
+        return loaded;
+    }
+
     private void save(Snapshot next) {
+        load();
         try { AtomicJsonFile.save(mapper, path, next); }
         catch (IOException ex) { throw new IllegalStateException("No se pudo guardar el catálogo histórico local. Se conserva la versión anterior."); }
         snapshot = next; matcher = new HistoryProductMatcher(next.products()); loadError = "";

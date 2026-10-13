@@ -14,6 +14,9 @@ import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -164,6 +167,54 @@ class OcrServiceTest {
         ))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("PaddleOCR no detecto texto util en la factura.");
+    }
+
+    @Test
+    void rejectsOverlappingFilesAndAcceptsAnotherAfterCompletion() throws Exception {
+        OcrResultMapper mapper = mock(OcrResultMapper.class);
+        OcrApiClient client = mock(OcrApiClient.class);
+        PdfPageRenderer pdfRenderer = mock(PdfPageRenderer.class);
+        OcrService service = new OcrService(mapper, client, pdfRenderer);
+        OcrResult expected = new OcrResult("PRODUCTO 123,45", List.of(), List.of(), "original", 1.0);
+        MockMultipartFile image = new MockMultipartFile("file", "ticket.png", "image/png", pngBytes(1, 1));
+        MockMultipartFile pdf = new MockMultipartFile("file", "ticket.pdf", "application/pdf", pdfWithPages(2));
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch finish = new CountDownLatch(1);
+        when(client.recognize(any(BufferedImage.class))).thenAnswer(invocation -> {
+            started.countDown();
+            if (!finish.await(5, TimeUnit.SECONDS)) throw new AssertionError("No se liberó la extracción de prueba");
+            return "respuesta-json";
+        });
+        when(mapper.parse("respuesta-json")).thenReturn(expected);
+        var executor = Executors.newSingleThreadExecutor();
+        try {
+            var first = executor.submit(() -> service.extract(image));
+            assertThat(started.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThatThrownBy(() -> service.extract(pdf)).isInstanceOf(ExtractionBusyException.class);
+            verify(pdfRenderer, never()).forEachPage(any(), anyBoolean(), any());
+            finish.countDown();
+            assertThat(first.get(5, TimeUnit.SECONDS)).isSameAs(expected);
+            assertThat(service.extract(image)).isSameAs(expected);
+        } finally {
+            finish.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void releasesExtractionAfterFailureSoTheUserCanRetry() throws Exception {
+        OcrResultMapper mapper = mock(OcrResultMapper.class);
+        OcrApiClient client = mock(OcrApiClient.class);
+        OcrService service = new OcrService(mapper, client, mock(PdfPageRenderer.class));
+        OcrResult expected = new OcrResult("PRODUCTO 123,45", List.of(), List.of(), "original", 1.0);
+        MockMultipartFile file = new MockMultipartFile("file", "ticket.png", "image/png", pngBytes(1, 1));
+        when(client.recognize(any(BufferedImage.class)))
+                .thenThrow(new OcrUnavailableException("OCR pendiente", null))
+                .thenReturn("respuesta-json");
+        when(mapper.parse("respuesta-json")).thenReturn(expected);
+
+        assertThatThrownBy(() -> service.extract(file)).isInstanceOf(OcrUnavailableException.class);
+        assertThat(service.extract(file)).isSameAs(expected);
     }
 
     private byte[] pngBytes(int width, int height) throws Exception {

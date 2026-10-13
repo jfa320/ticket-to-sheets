@@ -5,6 +5,7 @@ from numbers import Real
 import re
 
 from PIL import Image, ImageEnhance
+from scoring import valid_receipt_date
 
 
 MAX_REGIONS = 8
@@ -13,6 +14,7 @@ MAX_PIXELS = 1_000_000
 LOW_CONFIDENCE = 0.8
 MIN_CONFIDENCE = 0.85
 MIN_IMPROVEMENT = 0.1
+HIGH_FIELD_CONFIDENCE = .98
 
 
 def _number(value):
@@ -47,6 +49,24 @@ def _text(item):
     return " ".join(value.split()) if isinstance(value, str) else ""
 
 
+def _retry_priority(item):
+    text = _text(item).lower()
+    if "fecha" in text:
+        return 0
+    if re.fullmatch(r"\$?\s*[0-9OoCc]+(?:[.,][0-9OoCc]+)+", text):
+        return 1
+    return 2
+
+
+def _field_reread(item):
+    text = _text(item).lower()
+    if "fecha" in text and not valid_receipt_date(text):
+        return "date"
+    if re.fullmatch(r"\$?\s*[0-9OoCc]+(?:[.,][0-9OoCc]+)+", text):
+        return "price"
+    return None
+
+
 def _intersection(first, second):
     return (max(0.0, min(first[2], second[2]) - max(first[0], second[0])),
             max(0.0, min(first[3], second[3]) - max(first[1], second[1])))
@@ -78,14 +98,20 @@ def _safe_crop(bounds, neighbors, image_size):
     return tuple(crop)
 
 
-def _prepare_region(image, crop):
+def _prepare_region(image, crop, detail_image=None):
     width, height = crop[2] - crop[0], crop[3] - crop[1]
     scale = min(3.0, MAX_SIDE / width, MAX_SIDE / height, math.sqrt(MAX_PIXELS / (width * height)))
     # A very broad/large box offers no useful enlargement within the budget.
     if scale < 1.0:
         return None
     size = (max(1, int(width * scale)), max(1, int(height * scale)))
-    region = image.crop(crop)
+    if detail_image is not None:
+        ratio_x, ratio_y = detail_image.width / image.width, detail_image.height / image.height
+        native_crop = (math.floor(crop[0] * ratio_x), math.floor(crop[1] * ratio_y),
+                       math.ceil(crop[2] * ratio_x), math.ceil(crop[3] * ratio_y))
+        region = detail_image.crop(native_crop)
+    else:
+        region = image.crop(crop)
     if region.mode not in ("RGB", "L"):
         region = region.convert("RGB")
     if region.size != size:
@@ -98,6 +124,8 @@ def _content_profile(text):
     for token in text.split():
         value = token.strip("()[]{}:;$€£")
         numeric = re.fullmatch(r"[+\-−]?[0-9OIl|]+(?:[.,][0-9OIl|]+)*", value, flags=re.IGNORECASE)
+        if not numeric and any(separator in value for separator in ".,"):
+            numeric = re.fullmatch(r"[+\-−]?[0-9OIl|Cc]+(?:[.,][0-9OIl|Cc]+)+", value, flags=re.IGNORECASE)
         if numeric and any(character.isdigit() for character in value):
             sign = "-" if value.startswith(("-", "−")) else "+" if value.startswith("+") else ""
             numbers.append((sign, sum(character.isalnum() or character == "|" for character in value),
@@ -133,11 +161,16 @@ def _candidate(result, original, target, neighbors, crop, scale, region_size):
         return None
     acceptable = []
     source_confidence = _confidence(original)
+    field = _field_reread(original) if source_confidence is not None and source_confidence >= LOW_CONFIDENCE else None
+    minimum_confidence = HIGH_FIELD_CONFIDENCE if field else MIN_CONFIDENCE
+    minimum_gain = (0 if field == "date" else .02) if field else MIN_IMPROVEMENT
     for item in result:
         confidence = _confidence(item)
         text = _text(item)
         local = _bounds(item, region_size)
-        if confidence is None or confidence < MIN_CONFIDENCE or confidence - source_confidence < MIN_IMPROVEMENT - 1e-9:
+        if confidence is None or confidence < minimum_confidence or confidence - source_confidence < minimum_gain - 1e-9:
+            continue
+        if field == "date" and not valid_receipt_date(text):
             continue
         if not text or local is None or not preserves_content(_text(original), text):
             continue
@@ -162,12 +195,12 @@ def _candidate(result, original, target, neighbors, crop, scale, region_size):
     return text, confidence
 
 
-def refine_detections(image, detections, recognize_fn, max_regions=8):
+def refine_detections(image, detections, recognize_fn, max_regions=8, should_continue=None, detail_image=None):
     """Return ``(updated_detections, summary)`` after two reads per doubtful box.
 
     The callback accepts a PIL crop and returns detections in that crop's actual
-    enlarged coordinates. Only finite confidences below 0.8 and valid boxes are
-    retried, most uncertain first. Each crop uses raw enlargement plus moderate
+    enlarged coordinates. Retry uncertain text, incomplete dates and prices
+    below the field-specific confidence limit, with dates/prices first. Each crop uses raw enlargement plus moderate
     contrast, at most 3x, 1400 pixels per axis and 1 MP. The absolute budget is
     eight regions/sixteen OCR calls, even if ``max_regions`` is larger.
 
@@ -177,6 +210,8 @@ def refine_detections(image, detections, recognize_fn, max_regions=8):
     Order, count and original geometry are retained; input objects are untouched.
     Summary contains only counts: attemptedRegions, acceptedRegions, ocrCalls,
     failedCalls. The caller should invoke this on the winning OCR variant only.
+    An optional ``should_continue`` callback is checked before each OCR call;
+    stopping between the two reads never accepts an unconfirmed replacement.
     """
     if isinstance(max_regions, bool) or not isinstance(max_regions, int) or max_regions < 0:
         raise ValueError("max_regions must be a nonnegative integer")
@@ -186,9 +221,14 @@ def refine_detections(image, detections, recognize_fn, max_regions=8):
     eligible = []
     for index, item in enumerate(detections):
         confidence = _confidence(item)
-        if confidence is not None and confidence < LOW_CONFIDENCE and bounds[index] is not None and _text(item):
-            eligible.append((confidence, index))
-    for _, index in sorted(eligible):
+        field = _field_reread(item)
+        eligible_field = field == "date" and confidence is not None and confidence < HIGH_FIELD_CONFIDENCE \
+            or field == "price" and confidence is not None and confidence < .97
+        if confidence is not None and (confidence < LOW_CONFIDENCE or eligible_field) and bounds[index] is not None and _text(item):
+            eligible.append((_retry_priority(item), confidence, index))
+    for _, _, index in sorted(eligible):
+        if should_continue is not None and not should_continue():
+            break
         if summary["attemptedRegions"] >= min(max_regions, MAX_REGIONS):
             break
         original = detections[index]
@@ -196,13 +236,15 @@ def refine_detections(image, detections, recognize_fn, max_regions=8):
         crop = _safe_crop(bounds[index], neighbors, image.size)
         if crop is None:
             continue
-        prepared = _prepare_region(image, crop)
+        prepared = _prepare_region(image, crop, detail_image)
         if prepared is None:
             continue
         region, scale = prepared
         summary["attemptedRegions"] += 1
         reads = []
         for candidate_image in (region, ImageEnhance.Contrast(region).enhance(1.35)):
+            if should_continue is not None and not should_continue():
+                break
             summary["ocrCalls"] += 1
             try:
                 result = recognize_fn(candidate_image)
@@ -211,7 +253,7 @@ def refine_detections(image, detections, recognize_fn, max_regions=8):
                 reads.append(None)
                 continue
             reads.append(_candidate(result, original, bounds[index], neighbors, crop, scale, region.size))
-        if any(read is None for read in reads) or reads[0][0].upper() != reads[1][0].upper():
+        if len(reads) != 2 or any(read is None for read in reads) or reads[0][0].upper() != reads[1][0].upper():
             continue
         text = reads[0][0]
         confidence = min(read[1] for read in reads)

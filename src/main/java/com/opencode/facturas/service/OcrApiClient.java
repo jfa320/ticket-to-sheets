@@ -20,6 +20,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.URI;
+import java.net.SocketTimeoutException;
 import java.util.List;
 import java.util.function.IntConsumer;
 
@@ -29,6 +30,7 @@ class OcrApiClient {
 
     private final ObjectMapper objectMapper;
     private final RestTemplate restTemplate;
+    private final RestTemplate healthRestTemplate;
     private final String endpoint;
     private final String healthEndpoint;
     private final String language;
@@ -42,11 +44,13 @@ class OcrApiClient {
             String language,
             int connectTimeoutMs,
             int readTimeoutMs,
+            int healthTimeoutMs,
             int maxAttempts
     ) {
         this(
                 objectMapper,
                 buildRestTemplate(connectTimeoutMs, readTimeoutMs),
+                buildRestTemplate(healthTimeoutMs, healthTimeoutMs),
                 endpoint,
                 healthEndpoint,
                 language,
@@ -64,8 +68,25 @@ class OcrApiClient {
             int maxAttempts,
             IntConsumer retryWaiter
     ) {
+        this(objectMapper, restTemplate, restTemplate, endpoint, healthEndpoint, language, maxAttempts, retryWaiter);
+    }
+
+    OcrApiClient(
+            ObjectMapper objectMapper,
+            RestTemplate restTemplate,
+            RestTemplate healthRestTemplate,
+            String endpoint,
+            String healthEndpoint,
+            String language,
+            int maxAttempts,
+            IntConsumer retryWaiter
+    ) {
+        if (maxAttempts < 1) {
+            throw new IllegalArgumentException("La cantidad de intentos OCR debe ser positiva.");
+        }
         this.objectMapper = objectMapper;
         this.restTemplate = restTemplate;
+        this.healthRestTemplate = healthRestTemplate;
         this.endpoint = endpoint;
         this.healthEndpoint = healthEndpoint;
         this.language = language;
@@ -74,62 +95,91 @@ class OcrApiClient {
     }
 
     String recognize(BufferedImage image) {
+        ensureReady();
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.IMAGE_PNG);
         headers.setAccept(List.of(MediaType.APPLICATION_JSON));
         headers.set("X-OCR-Language", language);
 
         HttpEntity<byte[]> request = new HttpEntity<>(toPngBytes(image), headers);
-        RestClientException lastException = null;
+        try {
+            // No repetir una lectura tras perder la respuesta: Python puede seguir procesándola.
+            ResponseEntity<String> response = restTemplate.postForEntity(URI.create(endpoint), request, String.class);
+            String body = response.getBody();
+            if (!response.getStatusCode().is2xxSuccessful() || body == null || body.isBlank()) {
+                throw new IllegalStateException("El servicio OCR respondió vacío o con error.");
+            }
+            log.info("Servicio OCR respondió correctamente ({} bytes)", body.length());
+            return body;
+        } catch (ResourceAccessException ex) {
+            if (hasTimeoutCause(ex)) {
+                throw new IllegalStateException("El OCR superó el tiempo de espera. La lectura puede seguir en curso; esperá antes de reintentar.", ex);
+            }
+            throw new OcrUnavailableException("Se perdió la conexión con el OCR. La lectura puede seguir en curso; revisá el servicio y esperá antes de reintentar.", ex);
+        } catch (HttpStatusCodeException ex) {
+            if (ex.getStatusCode().value() == 429) {
+                throw new ExtractionBusyException();
+            }
+            if (ex.getStatusCode().value() == 503) {
+                throw new OcrUnavailableException("El OCR está preparando los modelos. Esperá a que termine y reintentá.", ex);
+            }
+            String responseBody = ex.getResponseBodyAsString();
+            log.error("Servicio OCR respondió HTTP {}: {}", ex.getStatusCode(), responseBody, ex);
+            throw new IllegalStateException("El servicio OCR respondió con error " + ex.getStatusCode() + ": " + responseBody, ex);
+        } catch (RestClientException ex) {
+            log.error("Error de comunicación con el servicio OCR", ex);
+            throw new IllegalStateException("El servicio OCR respondió con error. Revisá los logs del OCR.", ex);
+        }
+    }
 
+    private void ensureReady() {
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
-                log.info("Intento OCR {}/{}: verificando disponibilidad del servicio", attempt, maxAttempts);
                 waitForHealth();
-                ResponseEntity<String> response = restTemplate.postForEntity(URI.create(endpoint), request, String.class);
-                String body = response.getBody();
-                if (!response.getStatusCode().is2xxSuccessful() || body == null || body.isBlank()) {
-                    throw new IllegalStateException("El servicio OCR respondio vacio o con error.");
+                return;
+            } catch (OcrUnavailableException ex) {
+                log.warn("OCR no disponible en el intento {}/{}: {}", attempt, maxAttempts, ex.getMessage());
+                if (attempt == maxAttempts) {
+                    throw ex;
                 }
-                log.info("Servicio OCR respondió correctamente en el intento {} ({} bytes)", attempt, body.length());
-                return body;
-            } catch (ResourceAccessException ex) {
-                lastException = ex;
-                log.warn("Servicio OCR no disponible en el intento {}/{}: {}", attempt, maxAttempts, ex.getMessage());
                 retryWaiter.accept(attempt);
-            } catch (HttpStatusCodeException ex) {
-                String responseBody = ex.getResponseBodyAsString();
-                log.error("Servicio OCR respondió HTTP {}: {}", ex.getStatusCode(), responseBody, ex);
-                throw new IllegalStateException("El servicio OCR respondio con error " + ex.getStatusCode() + ": " + responseBody, ex);
-            } catch (RestClientException ex) {
-                log.error("Error de comunicación con el servicio OCR", ex);
-                throw new IllegalStateException("El servicio OCR respondio con error. Revisa los logs del contenedor PaddleOCR.", ex);
             }
         }
-
-        throw new IllegalStateException("No se pudo conectar al servicio OCR Docker en " + endpoint + ". Verifica que Docker Desktop este corriendo y que `docker compose ps` muestre el contenedor activo.", lastException);
     }
 
     private void waitForHealth() {
         try {
-            ResponseEntity<String> response = restTemplate.getForEntity(URI.create(healthEndpoint), String.class);
+            ResponseEntity<String> response = healthRestTemplate.getForEntity(URI.create(healthEndpoint), String.class);
             if (!response.getStatusCode().is2xxSuccessful()) {
-                log.warn("Healthcheck OCR devolvió HTTP {}", response.getStatusCode());
-                throw new IllegalStateException("El servicio OCR todavia no esta listo.");
+                throw new OcrUnavailableException("El OCR no está disponible. Revisá el servicio local y reintentá.", null);
             }
             JsonNode health = objectMapper.readTree(response.getBody() == null ? "{}" : response.getBody());
             if (!health.path("ocrReady").asBoolean(false)) {
-                log.info("Healthcheck OCR correcto, pero los modelos todavía no están listos");
-                throw new ResourceAccessException("El servicio OCR esta levantado, pero todavia esta descargando modelos.", new IOException("ocrReady=false"));
+                throw new OcrUnavailableException("El OCR está preparando los modelos. Esperá a que termine y reintentá.", null);
+            }
+            if (health.path("ocrBusy").asBoolean(false)) {
+                throw new ExtractionBusyException();
             }
             log.debug("Healthcheck OCR OK");
         } catch (IOException ex) {
-            log.error("Respuesta inválida del healthcheck OCR", ex);
-            throw new ResourceAccessException("No se pudo interpretar el health check OCR", ex);
+            throw new OcrUnavailableException("El OCR devolvió un estado inválido. Reiniciá el servicio local y reintentá.", ex);
+        } catch (HttpStatusCodeException ex) {
+            String message = ex.getStatusCode().value() == 503
+                    ? "El OCR está preparando los modelos. Esperá a que termine y reintentá."
+                    : "El OCR no está disponible. Revisá el servicio local y reintentá.";
+            throw new OcrUnavailableException(message, ex);
         } catch (RestClientException ex) {
-            log.warn("No se pudo consultar el healthcheck OCR: {}", ex.getMessage());
-            throw new ResourceAccessException("OCR health check fallo", new IOException(ex));
+            throw new OcrUnavailableException("No se pudo conectar con el OCR local. Iniciá el servicio OCR y reintentá.", ex);
         }
+    }
+
+    private static boolean hasTimeoutCause(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof SocketTimeoutException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private byte[] toPngBytes(BufferedImage image) {

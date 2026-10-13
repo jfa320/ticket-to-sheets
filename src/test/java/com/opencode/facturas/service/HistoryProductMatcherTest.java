@@ -40,6 +40,30 @@ class HistoryProductMatcherTest {
         assertThat(matcher.enrich(item("jabon marca prueba neutro 500g", "Genérico", "CORRECT"), new ArrayList<>()).estado()).isEqualTo("HISTORY");
     }
 
+    @Test void manualSupermarketLabelHasFixedNameAndBrandWithoutHidingPriceAmbiguity() {
+        var matcher = new HistoryProductMatcher(List.of(product("Almacen", "Genérico", "Otros"),
+                product("Almacén", "Marca vieja", "Limpieza")));
+        var original = item("ALMACÉN", "Marca vieja", "AMBIGUOUS");
+        List<String> warnings = new ArrayList<>();
+        var result = matcher.enrich(original, warnings);
+        assertThat(result.descripcion()).isEqualTo("Almacén");
+        assertThat(result.marca()).isEqualTo("Genérico");
+        assertThat(result.estado()).isEqualTo("AMBIGUOUS");
+        assertThat(result.cantidad()).isEqualTo(original.cantidad());
+        assertThat(result.precioUnitario()).isEqualTo(original.precioUnitario());
+        assertThat(result.fecha()).isEqualTo(original.fecha());
+        assertThat(result.categoria()).isEqualTo(original.categoria());
+        assertThat(warnings).isEmpty();
+    }
+
+    @Test void almacenesWithinSpecificProductNamesKeepNormalHistoryMatching() {
+        var matcher = new HistoryProductMatcher(List.of(product("Producto de almacén 500g", "Marca Prueba", "Otros")));
+        var result = matcher.enrich(item("marca prueba producto de almacen 500g", "Genérico", "CORRECT"), new ArrayList<>());
+        assertThat(result.descripcion()).isEqualTo("Producto de almacén 500g");
+        assertThat(result.marca()).isEqualTo("Marca Prueba");
+        assertThat(result.estado()).isEqualTo("HISTORY");
+    }
+
     @Test void explicitCorrectionsAndAmbiguousRowsKeepTheirFields() {
         HistoryProductMatcher matcher = new HistoryProductMatcher(List.of(product("Jabón neutro 500g", "Marca Prueba", "Limpieza")));
         ReceiptItem learned = item("marca prueba jabon neutro 500g", "Marca manual", "LEARNED");
@@ -82,12 +106,51 @@ class HistoryProductMatcherTest {
         }
     }
 
-    @Test void similarOcrIsOnlySuggestedWithoutRewritingTheRow() {
+    @Test void similarOcrIsAutomaticallyMappedWhenThereIsAClearWinner() {
         HistoryProductMatcher matcher = new HistoryProductMatcher(List.of(product("Jabón neutro 500g", "Marca Prueba", "Limpieza")));
         ReceiptItem original = item("marca prueba jabon neulro 500g", "Genérico", "CORRECT");
         List<String> warnings = new ArrayList<>();
+        ReceiptItem result = matcher.enrich(original, warnings);
+        assertThat(result.descripcion()).isEqualTo("Jabón neutro 500g");
+        assertThat(result.marca()).isEqualTo("Marca Prueba");
+        assertThat(result.categoria()).isEqualTo("Limpieza");
+        assertThat(result.estado()).isEqualTo("HISTORY");
+        assertThat(result.precioUnitario()).isEqualTo(original.precioUnitario());
+        assertThat(result.cantidad()).isEqualTo(original.cantidad());
+        assertThat(result.fecha()).isEqualTo(original.fecha());
+        assertThat(warnings).isEmpty();
+    }
+
+    @Test void recognizesReorderedAbbreviatedWordsAndEquivalentUnitSpellings() {
+        var matcher = new HistoryProductMatcher(List.of(product("Jabón líquido lavarropas 800ml", "Marca Prueba", "Limpieza")));
+        var result = matcher.enrich(item("lavarrop liq jabon marca prueba 800 ml", "Genérico", "CORRECT"), new ArrayList<>());
+        assertThat(result.descripcion()).isEqualTo("Jabón líquido lavarropas 800ml");
+        assertThat(result.estado()).isEqualTo("HISTORY");
+        matcher = new HistoryProductMatcher(List.of(product("Jabón neutro 500gr", "Marca Prueba", "Limpieza")));
+        assertThat(matcher.enrich(item("jabon neutro 500 g marca prueba", "Genérico", "CORRECT"), new ArrayList<>()).estado()).isEqualTo("HISTORY");
+    }
+
+    @Test void descriptiveNamesWithoutABrandCanBeCompletedButCompetingBrandsRequireReview() {
+        Product known = product("Jabón líquido lavarropas 800ml", "Marca Prueba", "Limpieza");
+        var original = item("jabon liquido lavarropas 800ml", "Genérico", "CORRECT");
+        var matcher = new HistoryProductMatcher(List.of(known));
+        assertThat(matcher.enrich(original, new ArrayList<>()).marca()).isEqualTo("Marca Prueba");
+        matcher = new HistoryProductMatcher(List.of(known, product(known.descripcion(), "Otra Marca", "Limpieza")));
+        List<String> warnings = new ArrayList<>();
         assertThat(matcher.enrich(original, warnings)).isSameAs(original);
-        assertThat(warnings).singleElement().asString().contains("Sugerencia", "Limpieza");
+        assertThat(warnings).singleElement().asString().contains("contradictorio");
+    }
+
+    @Test void closeFuzzyCandidatesAndAmbiguousPricesKeepTheOriginalRow() {
+        var matcher = new HistoryProductMatcher(List.of(product("Jabón neutro 500g", "Marca Prueba", "Limpieza"),
+                product("Jabón neutro 500g", "Marca Prueba", "Otros")));
+        var original = item("marca prueba jabon neulro 500g", "Genérico", "CORRECT");
+        List<String> warnings = new ArrayList<>();
+        assertThat(matcher.enrich(original, warnings)).isSameAs(original);
+        assertThat(warnings).isNotEmpty();
+        matcher = new HistoryProductMatcher(List.of(product("Jabón neutro 500g", "Marca Prueba", "Limpieza")));
+        original = item("marca prueba jabon neulro 500g", "Genérico", "AMBIGUOUS");
+        assertThat(matcher.enrich(original, new ArrayList<>())).isSameAs(original);
     }
 
     @Test void anotherStoreUnknownStoreBlankSignatureAndContradictingBrandReceiveNoOverride() {

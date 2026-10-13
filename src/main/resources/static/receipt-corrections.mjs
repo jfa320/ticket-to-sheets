@@ -4,7 +4,7 @@ const key = value => clean(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '
 const fieldsOf = item => Object.fromEntries(FIELDS.map(field => [field, clean(item[field])]));
 
 export function createCorrectionSaver(receipt, {
-    save, onStatus = () => {}, delay = 2000, setTimer = setTimeout, clearTimer = clearTimeout
+    save, onStatus = () => {}, delay = 600, setTimer = setTimeout, clearTimer = clearTimeout
 }) {
     // Una base por fila evita colisiones entre firmas repetidas y entre tickets.
     const snapshots = new Map(receipt.items.map(item => [item, {original: fieldsOf(item), byStore: new Map()}]));
@@ -21,8 +21,6 @@ export function createCorrectionSaver(receipt, {
             const store = clean(item.lugarDeCompra);
             const firma = clean(item.firma);
             if (!snapshot || !store || !firma || item.usar === false) continue;
-            // El backend no aprende filas cuya marca original o corregida sea Genérico.
-            if (key(snapshot.original.marca) === 'generico' || key(item.marca) === 'generico') continue;
             const current = fieldsOf(item);
             if (!current.descripcion) continue;
             const baseline = snapshot.byStore.get(key(store)) || snapshot.original;

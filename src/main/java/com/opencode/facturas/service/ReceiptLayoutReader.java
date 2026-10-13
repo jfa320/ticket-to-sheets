@@ -23,9 +23,6 @@ final class ReceiptLayoutReader {
     private static final Pattern MULTIPLIER_BEFORE_PRICE_PATTERN = Pattern.compile(
             "(?i)(?:^|\\s)(\\d+(?:[\\.,]\\d{1,4})?)\\s*x\\s*\\$?\\s*\\d"
     );
-    private static final Pattern STANDALONE_MULTIPLIER_PRICE_PATTERN = Pattern.compile(
-            "(?i)^\\s*(\\d+(?:[\\.,]\\d{1,4})?)\\s*x\\s*\\$?\\s*(\\d+(?:[\\.,]\\d{3})*[\\.,]\\d{2})\\s*$"
-    );
 
     private final ReceiptLineAnalyzer lineAnalyzer;
     private final ReceiptAmounts amounts;
@@ -37,12 +34,13 @@ final class ReceiptLayoutReader {
 
     Layout read(OcrResult result) {
         if (result == null) {
-            return new Layout(List.of(), Map.of());
+            return new Layout(List.of(), Map.of(), Map.of());
         }
 
         List<OcrResult> pages = result.pages().isEmpty() ? List.of(result) : result.pages();
         List<String> lines = new ArrayList<>();
         Map<Integer, List<Candidate>> candidatesByLine = new LinkedHashMap<>();
+        Map<Integer, Boolean> uncertainByLine = new LinkedHashMap<>();
 
         for (OcrResult page : pages) {
             List<Row> rows = rowsFromDetections(page.detections());
@@ -50,7 +48,7 @@ final class ReceiptLayoutReader {
                 rows = rowsFromLines(page.lines());
             }
 
-            appendRows(rows, lines, candidatesByLine);
+            appendRows(rows, lines, candidatesByLine, uncertainByLine);
         }
 
         if (lines.isEmpty() && result.text() != null) {
@@ -60,30 +58,30 @@ final class ReceiptLayoutReader {
                     .toList());
         }
 
-        return new Layout(lines, candidatesByLine);
+        return new Layout(lines, candidatesByLine, uncertainByLine);
     }
 
-    private void appendRows(List<Row> rows, List<String> lines, Map<Integer, List<Candidate>> candidatesByLine) {
+    private void appendRows(List<Row> rows, List<String> lines, Map<Integer, List<Candidate>> candidatesByLine,
+                            Map<Integer, Boolean> uncertainByLine) {
         for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
             Row row = rows.get(rowIndex);
-            Optional<QuantityPrice> quantityPrice = standaloneMultiplierPrice(row.text());
-            if (quantityPrice.isPresent() && rowIndex + 1 < rows.size()) {
+            if (lineAnalyzer.isProductFooter(lineAnalyzer.normalize(row.text()))) break;
+            if (rowIndex + 1 < rows.size()) {
                 Row followingRow = rows.get(rowIndex + 1);
                 Optional<Candidate> followingCandidate = followingRow.candidate(lineAnalyzer, amounts);
                 if (followingCandidate.isPresent() && !followingCandidate.get().priceIsUnit()) {
                     Candidate candidate = followingCandidate.get();
-                    double quantity = amounts.parseQuantity(quantityPrice.get().quantity()).orElse(1.0);
-                    double unitPrice = amounts.parse(quantityPrice.get().unitPrice());
-                    double total = amounts.parse(candidate.rawPrice());
-                    if (quantity > 0 && amounts.isConsistent(unitPrice, quantity, total)) {
+                    var quantityPrice = ReceiptQuantityReader.read(row.text(), candidate.rawPrice(), amounts);
+                    if (quantityPrice.isPresent()) {
                         int lineIndex = lines.size();
                         lines.add(followingRow.text());
+                        uncertainByLine.put(lineIndex, row.hasUncertainOcr() || followingRow.hasUncertainOcr());
                         candidatesByLine.put(lineIndex, List.of(new Candidate(
                                 candidate.description(),
                                 candidate.rawPrice(),
-                                amounts.formatQuantity(quantity),
+                                quantityPrice.get().quantity(),
                                 false,
-                                candidate.ambiguous(),
+                                candidate.ambiguous() || quantityPrice.get().uncertain(),
                                 candidate.sourceLine()
                         )));
                         rowIndex++;
@@ -94,18 +92,12 @@ final class ReceiptLayoutReader {
 
             int lineIndex = lines.size();
             lines.add(row.text());
+            uncertainByLine.put(lineIndex, row.hasUncertainOcr());
             row.candidate(lineAnalyzer, amounts).ifPresent(candidate ->
                     candidatesByLine.put(lineIndex, List.of(candidate)));
         }
     }
 
-    private static Optional<QuantityPrice> standaloneMultiplierPrice(String rowText) {
-        Matcher matcher = STANDALONE_MULTIPLIER_PRICE_PATTERN.matcher(rowText);
-        if (!matcher.matches()) {
-            return Optional.empty();
-        }
-        return Optional.of(new QuantityPrice(matcher.group(1), matcher.group(2)));
-    }
 
     private List<Row> rowsFromLines(List<OcrLine> lines) {
         if (lines == null || lines.isEmpty()) {
@@ -130,9 +122,12 @@ final class ReceiptLayoutReader {
             return List.of();
         }
 
+        double slope = receiptSlope(detections);
         List<Box> boxes = detections.stream()
                 .map(this::boxFrom)
                 .flatMap(Optional::stream)
+                .map(box -> new Box(box.text(), box.confidence(), box.top() - slope * (box.left() + box.right()) / 2,
+                        box.left(), box.right(), box.bottom() - slope * (box.left() + box.right()) / 2))
                 .sorted(Comparator.comparingDouble(Box::top).thenComparingDouble(Box::left))
                 .toList();
         List<MutableRow> rows = new ArrayList<>();
@@ -140,7 +135,7 @@ final class ReceiptLayoutReader {
         for (Box box : boxes) {
             MutableRow matchingRow = rows.stream()
                     .filter(row -> sameRow(row, box))
-                    .findFirst()
+                    .min(Comparator.comparingDouble(row -> Math.abs(row.center() - box.center())))
                     .orElse(null);
             if (matchingRow == null) {
                 rows.add(new MutableRow(box));
@@ -182,7 +177,27 @@ final class ReceiptLayoutReader {
     private boolean sameRow(MutableRow row, Box box) {
         double centerDistance = Math.abs(row.center() - box.center());
         double threshold = Math.max(8.0, Math.min(row.height(), box.height()) * 0.45);
-        return centerDistance <= threshold;
+        return centerDistance <= threshold && row.boxes().stream().noneMatch(existing -> {
+            double overlap = Math.min(existing.right(), box.right()) - Math.max(existing.left(), box.left());
+            return overlap >= Math.min(existing.width(), box.width()) * .5;
+        });
+    }
+
+    private double receiptSlope(List<OcrDetection> detections) {
+        List<Double> slopes = new ArrayList<>();
+        for (OcrDetection detection : detections) {
+            Optional<Box> box = boxFrom(detection);
+            if (box.isEmpty() || detection.box().size() < 4 || box.get().width() < box.get().height() * 3
+                    || lineAnalyzer.containsMoney(detection.text())
+                    || lineAnalyzer.shouldSkip(lineAnalyzer.normalize(detection.text()))) continue;
+            var first = detection.box().get(0); var second = detection.box().get(1);
+            if (first.size() < 2 || second.size() < 2 || second.get(0) - first.get(0) < 50) continue;
+            double slope = (second.get(1) - first.get(1)) / (second.get(0) - first.get(0));
+            if (Double.isFinite(slope) && Math.abs(slope) <= .15) slopes.add(slope);
+        }
+        if (slopes.size() < 3) return 0;
+        slopes.sort(Double::compareTo);
+        return slopes.get(slopes.size() / 2);
     }
 
     private static boolean isQuantityToken(String value) {
@@ -194,10 +209,8 @@ final class ReceiptLayoutReader {
         return matcher.find() ? Optional.of(matcher.group(1)) : Optional.empty();
     }
 
-    private record QuantityPrice(String quantity, String unitPrice) {
-    }
-
-    record Layout(List<String> lines, Map<Integer, List<Candidate>> candidatesByLine) {
+    record Layout(List<String> lines, Map<Integer, List<Candidate>> candidatesByLine,
+                  Map<Integer, Boolean> uncertainByLine) {
     }
 
     record Candidate(String description, String rawPrice, String quantity, boolean priceIsUnit,
@@ -274,6 +287,11 @@ final class ReceiptLayoutReader {
                     .trim();
         }
 
+        boolean hasUncertainOcr() {
+            return boxes.stream().anyMatch(box -> box.confidence() != null && box.confidence() < LOW_CONFIDENCE_THRESHOLD
+                    || box.isExtremelyWide());
+        }
+
         Optional<Candidate> candidate(ReceiptLineAnalyzer lineAnalyzer, ReceiptAmounts amounts) {
             String sourceLine = lineAnalyzer.clean(text());
             String normalized = lineAnalyzer.normalize(sourceLine);
@@ -326,14 +344,8 @@ final class ReceiptLayoutReader {
             MoneyBox firstMoney = moneyBoxes.get(0);
             MoneyBox lastMoney = moneyBoxes.get(moneyBoxes.size() - 1);
             boolean priceIsUnit = false;
-            boolean lowConfidence = boxes.stream()
-                    .map(Box::confidence)
-                    .filter(confidence -> confidence != null)
-                    .anyMatch(confidence -> confidence < LOW_CONFIDENCE_THRESHOLD);
-            boolean suspiciousGeometry = boxes.stream().anyMatch(Box::isExtremelyWide);
             boolean ambiguous = lineAnalyzer.isAmbiguous(sourceLine, normalized)
-                    || lowConfidence
-                    || suspiciousGeometry;
+                    || hasUncertainOcr();
             String rawPrice = lastMoney.value();
 
             if (moneyBoxes.size() >= 2 && (explicitQuantity.isPresent() || quantityBox.isPresent())) {

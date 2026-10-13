@@ -1,9 +1,10 @@
 import {
-    createReceipt, buildExports, formatTotal, validationErrors, toDateInputValue, formatDateForItems
+    createReceipt, buildExports, buildExportItems, formatTotal, validationErrors, toDateInputValue, formatDateForItems,
+    calculateSummary, discountValidationErrors
 } from './receipt-model.mjs';
 import {extractReceipt, saveCorrections, validateFile} from './receipt-api.mjs';
-import {createCorrectionSaver} from './receipt-corrections.mjs';
-import {renderItems, renderWarnings, markInvalidCells} from './receipt-view.mjs';
+import {createCorrectionSaver} from './receipt-corrections.mjs?v=2';
+import {renderItems, renderWarnings, renderDiscounts, markInvalidCells} from './receipt-view.mjs';
 import {createOcrReview} from './ocr-review.mjs';
 import {createSheetsPanel} from './receipt-sheets.mjs?v=2';
 
@@ -36,15 +37,23 @@ let correctionSaver = null;
 let output = buildExports([]);
 let selectedFile = null;
 let loading = false;
+let acknowledgedOutput = null;
+let correctionsPending = false;
+let unloadWarningAttached = false;
+const pageWindow = typeof window === 'undefined' ? null : window;
 let copyToastTimer = null;
 let undoTimer = null;
 let removedItem = null;
 let previewUrl = null;
 let sheetsBusy = false;
 const sheetsPanel = createSheetsPanel({
-    getItems: () => receipt?.items || [],
+    getItems: () => receipt ? buildExportItems(receipt.items, receipt.discounts, receipt) : [],
     onBusy(busy) { sheetsBusy = busy; updateUploadControls(); },
-    onSuccess() { setActiveStep(2); }
+    onSuccess() {
+        acknowledgedOutput = output.pipe;
+        updateUnloadWarning();
+        setActiveStep(2);
+    }
 });
 
 function updateUploadControls() {
@@ -63,7 +72,6 @@ function selectFile(file) {
     if (loading || sheetsBusy) return;
     const error = validateFile(file);
     selectedFile = error ? null : file;
-    ocrReview.clear();
     status.textContent = error || `Archivo listo: ${file.name}`;
     fileSummary.classList.toggle('hidden', Boolean(error));
     fileName.textContent = error ? '' : file.name;
@@ -126,24 +134,28 @@ form.addEventListener('submit', async event => {
     const file = selectedFile;
     loading = true;
     updateUploadControls();
-    status.textContent = 'Procesando la factura. Esto puede tardar unos segundos…';
+    status.textContent = 'Procesando la factura. Las imágenes grandes y los PDF pueden tardar varios minutos…';
     try {
         // Resolver ediciones pendientes antes de sustituir el ticket que las originó.
         if (correctionSaver && !await correctionSaver.flush()) {
             status.textContent = 'Reintentá el guardado de las correcciones antes de cargar otra factura.';
             return;
         }
-        clearReceiptState();
         const payload = await extractReceipt(file);
         const nextReceipt = createReceipt(payload);
+        // Conservar el ticket y sus ediciones hasta recibir una respuesta válida.
+        clearReceiptState();
         receipt = nextReceipt;
         correctionSaver = createCorrectionSaver(receipt, {
             save: saveCorrections,
             onStatus(state, message) {
                 byId('learnStatus').textContent = message;
                 retryCorrections.classList.toggle('hidden', state !== 'error');
+                correctionsPending = ['pending', 'saving', 'error'].includes(state);
+                updateUnloadWarning();
             }
         });
+        correctionsPending = false;
         byId('learnStatus').textContent = '';
         retryCorrections.classList.add('hidden');
         storeName.value = receipt.storeName;
@@ -173,6 +185,9 @@ function clearReceiptState() {
     correctionSaver?.dispose();
     correctionSaver = null;
     receipt = null;
+    acknowledgedOutput = null;
+    correctionsPending = false;
+    updateUnloadWarning();
     sheetsPanel.resetReceipt();
     output = buildExports([]);
     removedItem = null;
@@ -182,6 +197,8 @@ function clearReceiptState() {
     dateValue.value = '';
     byId('itemCount').textContent = '0';
     byId('totalValue').textContent = formatTotal(0);
+    byId('discountsList').replaceChildren();
+    byId('discountsPanel').classList.add('hidden');
     byId('rawOutput').value = '';
     byId('csvOutput').value = '';
     byId('tsvOutput').value = '';
@@ -196,22 +213,29 @@ function clearReceiptState() {
 function refresh() {
     if (!receipt) return;
     sheetsPanel.refresh();
-    output = buildExports(receipt.items);
+    output = buildExports(receipt.items, receipt.discounts, receipt);
+    updateUnloadWarning();
     byId('itemCount').textContent = output.count;
-    byId('totalValue').textContent = formatTotal(output.total);
+    const summary = calculateSummary(receipt.items, receipt.discounts);
+    byId('subtotalValue').textContent = formatTotal(summary.subtotal);
+    byId('discountTotalValue').textContent = formatTotal(summary.discountTotal);
+    byId('totalValue').textContent = formatTotal(summary.total);
     byId('csvOutput').value = output.pipe;
     byId('tsvOutput').value = output.rowsOnly;
     const errors = validationErrors(receipt.items);
-    copyButtons.forEach(button => { button.disabled = output.count === 0 || errors.length > 0; });
-    renderWarnings([...receipt.warnings, ...errors.map(error => error.message)], byId('warningsPanel'), byId('warningsList'));
+    const discountErrors = discountValidationErrors(receipt.discounts);
+    const hasErrors = errors.length > 0 || discountErrors.length > 0;
+    copyButtons.forEach(button => { button.disabled = output.count === 0 || hasErrors; });
+    renderWarnings([...receipt.warnings, ...errors.map(error => error.message), ...discountErrors], byId('warningsPanel'), byId('warningsList'));
     markInvalidCells(errors, itemsBody);
-    byId('exportHint').setAttribute('role', errors.length ? 'alert' : 'status');
-    byId('exportHint').textContent = errors.length
+    byId('exportHint').setAttribute('role', hasErrors ? 'alert' : 'status');
+    byId('exportHint').textContent = hasErrors
         ? 'Corregí los campos marcados o desmarcá esas filas antes de copiar.'
-        : output.count ? 'Se copian únicamente las filas marcadas para usar.' : 'Seleccioná al menos una fila para copiar.';
+        : output.count ? 'Se copian las filas y bonificaciones marcadas para usar.' : 'Seleccioná al menos una fila para copiar.';
 }
 
 function renderTable() {
+    renderDiscounts(receipt.discounts, byId('discountsPanel'), byId('discountsList'), refresh);
     const hasItems = receipt.items.length > 0;
     byId('emptyItems').classList.toggle('hidden', hasItems);
     document.querySelector('.table-scroll').classList.toggle('hidden', !hasItems);
@@ -263,6 +287,7 @@ function updateCommonField(field, value) {
     if (!receipt || loading || sheetsBusy) return;
     const cleaned = value.trim();
     if (field === 'fecha') receipt.date = cleaned;
+    if (field === 'lugarDeCompra') receipt.storeName = cleaned;
     receipt.items.forEach(item => { item[field] = cleaned; });
     itemsBody.querySelectorAll(`[data-field="${field}"]`).forEach(cell => { cell.textContent = cleaned; });
     refresh();
@@ -287,14 +312,36 @@ undoRemove.addEventListener('click', () => {
 });
 
 async function copyText(value, message) {
-    if (!receipt || output.count === 0 || validationErrors(receipt.items).length > 0) return;
+    if (!receipt || output.count === 0 || validationErrors(receipt.items).length > 0
+            || discountValidationErrors(receipt.discounts).length > 0) return;
+    const copiedOutput = output.pipe;
     try {
         await navigator.clipboard.writeText(value);
+        acknowledgedOutput = copiedOutput;
+        updateUnloadWarning();
         setActiveStep(2);
         showCopyToast(message);
     } catch {
         showCopyToast('No se pudo copiar. Podés seleccionar y copiar el texto de salida.', true);
     }
+}
+
+function updateUnloadWarning() {
+    if (!pageWindow) return;
+    const hasPendingWork = Boolean(receipt)
+        && (acknowledgedOutput === null || acknowledgedOutput !== output.pipe || correctionsPending);
+    if (hasPendingWork && !unloadWarningAttached) {
+        pageWindow.addEventListener('beforeunload', warnAboutPendingWork);
+        unloadWarningAttached = true;
+    } else if (!hasPendingWork && unloadWarningAttached) {
+        pageWindow.removeEventListener('beforeunload', warnAboutPendingWork);
+        unloadWarningAttached = false;
+    }
+}
+
+function warnAboutPendingWork(event) {
+    event.preventDefault();
+    event.returnValue = true;
 }
 
 function showCopyToast(message, error = false) {

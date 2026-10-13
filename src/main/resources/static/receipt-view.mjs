@@ -1,4 +1,41 @@
-import {COLUMNS} from './receipt-model.mjs';
+import {COLUMNS, parseLocalizedNumber} from './receipt-model.mjs';
+
+export function renderDiscounts(discounts, panel, list, onChange) {
+    list.replaceChildren();
+    panel.classList.toggle('hidden', discounts.length === 0);
+    discounts.forEach((discount, index) => {
+        const row = document.createElement('li');
+        row.className = 'discount-row';
+        const useLabel = document.createElement('label');
+        const use = document.createElement('input');
+        use.type = 'checkbox';
+        use.checked = discount.usar !== false;
+        useLabel.append(use, document.createTextNode(discount.concepto || 'Bonificación'));
+        use.addEventListener('change', () => { discount.usar = use.checked; validate(); onChange(); });
+        const amountLabel = document.createElement('label');
+        amountLabel.append(document.createTextNode('Importe'));
+        const amount = document.createElement('input');
+        amount.type = 'text';
+        amount.inputMode = 'decimal';
+        amount.value = discount.importe;
+        amount.setAttribute('aria-label', `Importe de ${discount.concepto || `bonificación ${index + 1}`}`);
+        const error = document.createElement('span');
+        error.id = `discount-error-${index}`;
+        error.className = 'discount-error';
+        amount.setAttribute('aria-describedby', error.id);
+        function validate() {
+            const number = parseLocalizedNumber(discount.importe);
+            const invalid = discount.usar !== false && (number === null || number > 0);
+            amount.setAttribute('aria-invalid', String(invalid));
+            error.textContent = invalid ? 'Ingresá un importe negativo válido.' : '';
+        }
+        amount.addEventListener('input', () => { discount.importe = amount.value.trim(); validate(); onChange(); });
+        amountLabel.append(amount);
+        row.append(useLabel, amountLabel, error);
+        list.append(row);
+        validate();
+    });
+}
 
 export function renderWarnings(warnings, panel, list) {
     list.replaceChildren();
