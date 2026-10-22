@@ -119,6 +119,47 @@ def _prepare_region(image, crop, detail_image=None):
     return region, (size[0] / width, size[1] / height)
 
 
+def _deskew_context(image, detections, index, boxes, detail_image):
+    """Separate slanted price polygons whose axis-aligned rectangles overlap."""
+    points = detections[index].get("box")
+    if not isinstance(points, (list, tuple)) or len(points) != 4:
+        return None
+    def polygon(item, fallback):
+        values = item.get("box")
+        if isinstance(values, (list, tuple)) and len(values) == 4 and all(
+                isinstance(point, (list, tuple)) and len(point) >= 2
+                and all(_number(value) is not None for value in point[:2]) for point in values):
+            return values
+        left, top, right, bottom = fallback
+        return ((left, top), (right, top), (right, bottom), (left, bottom))
+    points = polygon(detections[index], boxes[index])
+    dx, dy = points[1][0] - points[0][0], points[1][1] - points[0][1]
+    if dx <= 0:
+        return None
+    angle = math.degrees(math.atan2(dy, dx))
+    if not .5 <= abs(angle) <= 10:
+        return None
+    target = boxes[index]
+    cx, cy = (target[0] + target[2]) / 2, (target[1] + target[3]) / 2
+    cosine, sine = math.cos(math.radians(angle)), math.sin(math.radians(angle))
+    def transform(item, box):
+        if box is None:
+            return None
+        rotated = [(cx + cosine * (x - cx) + sine * (y - cy),
+                    cy - sine * (x - cx) + cosine * (y - cy)) for x, y, *_ in polygon(item, box)]
+        return (min(p[0] for p in rotated), min(p[1] for p in rotated),
+                max(p[0] for p in rotated), max(p[1] for p in rotated))
+    aligned = [transform(item, box) for item, box in zip(detections, boxes)]
+    selected = aligned[index]
+    if not (0 <= selected[0] < selected[2] <= image.width and 0 <= selected[1] < selected[3] <= image.height):
+        return None
+    rotate = lambda raster, center: raster.rotate(angle, resample=Image.Resampling.BICUBIC,
+                center=center, fillcolor="white" if raster.mode in ("RGB", "L") else None)
+    detail = None if detail_image is None else rotate(detail_image,
+                (cx * detail_image.width / image.width, cy * detail_image.height / image.height))
+    return rotate(image, (cx, cy)), aligned, detail
+
+
 def _content_profile(text):
     words, numbers = [], []
     for token in text.split():
@@ -156,14 +197,25 @@ def preserves_content(original, candidate):
                for old, new in zip(original_numbers, candidate_numbers))
 
 
+def preserves_date_label(original, candidate):
+    # OCR may fuse the label and a damaged date into one token. Splitting it
+    # into 'Fecha 25/09/2026' must not be rejected as a shortened word.
+    def prefix(text):
+        before_digits = re.split(r"\d", text, maxsplit=1)[0]
+        return re.sub(r"[^a-z]", "", before_digits.casefold())
+    return prefix(original) == prefix(candidate) and prefix(original).startswith("fecha") \
+        and valid_receipt_date(candidate) \
+        and sum(c.isalnum() for c in candidate) >= sum(c.isalnum() for c in original) * .8
+
+
 def _candidate(result, original, target, neighbors, crop, scale, region_size):
     if not isinstance(result, (list, tuple)):
         return None
     acceptable = []
     source_confidence = _confidence(original)
-    field = _field_reread(original) if source_confidence is not None and source_confidence >= LOW_CONFIDENCE else None
-    minimum_confidence = HIGH_FIELD_CONFIDENCE if field else MIN_CONFIDENCE
-    minimum_gain = (0 if field == "date" else .02) if field else MIN_IMPROVEMENT
+    field = _field_reread(original)
+    minimum_confidence = HIGH_FIELD_CONFIDENCE if field == "date" or field and source_confidence >= LOW_CONFIDENCE else MIN_CONFIDENCE
+    minimum_gain = (0 if field == "date" else .02) if field and source_confidence >= LOW_CONFIDENCE else MIN_IMPROVEMENT
     for item in result:
         confidence = _confidence(item)
         text = _text(item)
@@ -172,7 +224,8 @@ def _candidate(result, original, target, neighbors, crop, scale, region_size):
             continue
         if field == "date" and not valid_receipt_date(text):
             continue
-        if not text or local is None or not preserves_content(_text(original), text):
+        preserves = preserves_date_label(_text(original), text) if field == "date" else preserves_content(_text(original), text)
+        if not text or local is None or not preserves:
             continue
         edge_margin = max(2.0, min(scale))
         if min(local[0], local[1], region_size[0] - local[2], region_size[1] - local[3]) < edge_margin:
@@ -226,17 +279,26 @@ def refine_detections(image, detections, recognize_fn, max_regions=8, should_con
             or field == "price" and confidence is not None and confidence < .97
         if confidence is not None and (confidence < LOW_CONFIDENCE or eligible_field) and bounds[index] is not None and _text(item):
             eligible.append((_retry_priority(item), confidence, index))
+            if field == "price" and confidence >= LOW_CONFIDENCE:
+                updated[index] = dict(item, reviewRequired=True)
     for _, _, index in sorted(eligible):
         if should_continue is not None and not should_continue():
             break
         if summary["attemptedRegions"] >= min(max_regions, MAX_REGIONS):
             break
         original = detections[index]
-        neighbors = [box for neighbor_index, box in enumerate(bounds) if box is not None and neighbor_index != index]
-        crop = _safe_crop(bounds[index], neighbors, image.size)
+        region_image, region_bounds, region_detail = image, bounds, detail_image
+        neighbors = [box for neighbor_index, box in enumerate(region_bounds) if box is not None and neighbor_index != index]
+        crop = _safe_crop(region_bounds[index], neighbors, region_image.size)
+        if crop is None and _field_reread(original) == "price":
+            aligned = _deskew_context(image, detections, index, bounds, detail_image)
+            if aligned is not None:
+                region_image, region_bounds, region_detail = aligned
+                neighbors = [box for neighbor_index, box in enumerate(region_bounds) if box is not None and neighbor_index != index]
+                crop = _safe_crop(region_bounds[index], neighbors, region_image.size)
         if crop is None:
             continue
-        prepared = _prepare_region(image, crop, detail_image)
+        prepared = _prepare_region(region_image, crop, region_detail)
         if prepared is None:
             continue
         region, scale = prepared
@@ -252,11 +314,12 @@ def refine_detections(image, detections, recognize_fn, max_regions=8, should_con
                 summary["failedCalls"] += 1
                 reads.append(None)
                 continue
-            reads.append(_candidate(result, original, bounds[index], neighbors, crop, scale, region.size))
+            reads.append(_candidate(result, original, region_bounds[index], neighbors, crop, scale, region.size))
         if len(reads) != 2 or any(read is None for read in reads) or reads[0][0].upper() != reads[1][0].upper():
             continue
         text = reads[0][0]
         confidence = min(read[1] for read in reads)
         updated[index] = dict(original, text=text, confidence=confidence, score=confidence)
+        updated[index].pop("reviewRequired", None)
         summary["acceptedRegions"] += 1
     return updated, summary

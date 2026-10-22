@@ -27,6 +27,57 @@ def detection(text, top, bottom, confidence):
 
 @unittest.skipUnless(importlib.util.find_spec("flask"), "Flask is not installed")
 class OcrServiceTest(unittest.TestCase):
+    def test_orientation_probe_cannot_replace_a_completed_full_resolution_reading(self):
+        image=Image.new('RGB',(400,600),'white');probe=Image.new('RGB',(200,300),'white')
+        search=Mock(complete=False)
+        search.variants.side_effect=lambda factory: factory(0)
+        with patch.object(self.service,'get_ocr',return_value=Mock()), \
+                patch.object(self.service,'AdaptiveSearch',return_value=search), \
+                patch.object(self.service,'build_variants',return_value=iter([
+                    ('probe-original',probe,{'frame':'full:0','size':probe.size,'probe':True}),
+                    ('original-original',image,{'frame':'full:0','size':image.size})])), \
+                patch.object(self.service,'ocr_image',side_effect=[([detection('FRAGMENTO',10,30,.99)],[detection('FRAGMENTO',10,30,.99)]),
+                    ([detection('PRODUCTO COMPLETO 1200,00',10,30,.96)],[detection('PRODUCTO COMPLETO 1200,00',10,30,.96)])]), \
+                patch.object(self.service,'score_lines',side_effect=[200,100]), \
+                patch.dict(os.environ,{'OCR_TARGETED_RETRY':'false','OCR_VARIANT_FUSION':'false','OCR_ADAPTIVE_SEARCH':'true'}):
+            name,lines,_,_=self.service.run_best_ocr(image,'es')
+        self.assertEqual('original-original',name)
+        self.assertEqual('PRODUCTO COMPLETO 1200,00',lines[0]['text'])
+
+    def test_unconfirmed_price_metadata_reaches_the_response_without_a_text_replacement(self):
+        image = Image.new('RGB',(200,100),'white')
+        original = [detection('2800,00',10,30,.946)]
+        flagged = [dict(original[0],reviewRequired=True)]
+        with patch.object(self.service,'get_ocr',return_value=Mock()), \
+                patch.object(self.service,'build_variants',return_value=iter([('original-original',image)])), \
+                patch.object(self.service,'ocr_image',return_value=(original,original)), \
+                patch.object(self.service,'refine_detections',return_value=(flagged,
+                    {'attemptedRegions':1,'acceptedRegions':0,'ocrCalls':2,'failedCalls':0})), \
+                patch.dict(os.environ,{'OCR_TARGETED_RETRY':'true','OCR_VARIANT_FUSION':'false'}):
+            _,lines,detections,_ = self.service.run_best_ocr(image,'es')
+        self.assertTrue(detections[0]['reviewRequired'])
+        self.assertEqual('2800,00',lines[0]['text'])
+        self.assertEqual(.946,detections[0]['confidence'])
+
+    def test_budget_override_is_validated_and_does_not_leak_to_the_next_request(self):
+        output = BytesIO()
+        Image.new("RGB", (20, 40), "white").save(output, "PNG")
+        seen = []
+        def recognize(*args, **kwargs):
+            seen.append(self.service.search_budget_seconds())
+            return "synthetic", [], [], 1.0
+        with patch.dict(self.service.OCR_CACHE, {self.service.DEFAULT_LANGUAGE: Mock()}), \
+                patch.dict(os.environ, {"OCR_SEARCH_BUDGET_SECONDS": "90", "APP_OCR_DEBUG": "false"}), \
+                patch.object(self.service, "run_best_ocr", side_effect=recognize):
+            client = self.service.app.test_client()
+            for value in ("4", "181", "NaN", "40.5"):
+                self.assertEqual(400, client.post("/ocr", data=output.getvalue(),
+                        headers={"X-OCR-Search-Budget-Seconds": value}).status_code)
+            self.assertEqual(200, client.post("/ocr", data=output.getvalue(),
+                    headers={"X-OCR-Search-Budget-Seconds": "40"}).status_code)
+            self.assertEqual(200, client.post("/ocr", data=output.getvalue()).status_code)
+        self.assertEqual([40, 90], seen)
+
     def setUp(self):
         # Exercise Flask and image orchestration without downloading OCR models.
         # Keep compiled image dependencies outside the temporary module patch.

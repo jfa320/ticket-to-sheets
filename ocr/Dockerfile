@@ -26,6 +26,10 @@ COPY ocr/image_variants.py ./image_variants.py
 COPY ocr/document_geometry.py ./document_geometry.py
 COPY ocr/illumination.py ./illumination.py
 COPY ocr/evaluate.py ./evaluate.py
+COPY ocr/benchmark.py ./benchmark.py
+COPY ocr/search_policy.py ./search_policy.py
+COPY ocr/synthetic_corpus.py ./synthetic_corpus.py
+COPY ocr/receipt_metrics.py ./receipt_metrics.py
 COPY ocr/ocr_regions.py ./ocr_regions.py
 COPY ocr/targeted_retry.py ./targeted_retry.py
 COPY ocr/variant_fusion.py ./variant_fusion.py

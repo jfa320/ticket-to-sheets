@@ -1,6 +1,7 @@
 """Combine corroborated OCR readings without mixing coordinate frames."""
 
 import math
+import re
 from targeted_retry import preserves_content
 
 
@@ -22,12 +23,13 @@ def overlap(a, b):
     return max(0, min(a[2], b[2]) - max(a[0], b[0])), max(0, min(a[3], b[3]) - max(a[1], b[1]))
 
 
-def reading_for_box(original, others, scale, neighbors):
+def reading_for_box(original, others, scale, neighbors, price_field=False):
     target = bounds(original)
     pieces = []
     for item in others:
         box, certainty = bounds(item), confidence(item)
-        if box is None or certainty is None or certainty < max(0.85, confidence(original) + 0.1 - 1e-9):
+        threshold = max(.98, confidence(original) + .02 - 1e-9) if price_field and confidence(original) >= .8 else max(.85, confidence(original) + .1 - 1e-9)
+        if box is None or certainty is None or certainty < threshold:
             continue
         box = [box[0] * scale[0], box[1] * scale[1], box[2] * scale[0], box[3] * scale[1]]
         width, height = overlap(target, box)
@@ -75,7 +77,8 @@ def fuse_detections(detections, metadata, alternatives):
     base_fingerprint = metadata.get("fingerprint")
     for index, original in enumerate(detections):
         certainty, target = confidence(original), bounds(original)
-        if certainty is None or certainty >= 0.8 or target is None:
+        price_field = bool(re.fullmatch(r"\$?\s*\d+(?:[.,]\d+)+", str(original.get("text", "")).strip()))
+        if certainty is None or certainty >= (.97 if price_field else .8) or target is None:
             continue
         neighbors = [bounds(item) for pos, item in enumerate(detections) if pos != index and bounds(item)]
         votes = {}
@@ -88,17 +91,21 @@ def fuse_detections(detections, metadata, alternatives):
             seen.add(fingerprint)
             width, height = other_meta["size"]
             reading = reading_for_box(original, alternative["detections"],
-                                      (base_width / width, base_height / height), neighbors)
+                                      (base_width / width, base_height / height), neighbors, price_field)
             if reading:
                 text, quality = reading
                 votes.setdefault(text.upper(), []).append((text, quality))
         if len(votes) > 1:
             summary["conflictingRegions"] += 1
+            if price_field:
+                updated[index] = dict(original, reviewRequired=True)
             continue
         if len(votes) != 1:
             continue
         support = next(iter(votes.values()))
         if len(support) < 2:
+            if price_field and support[0][0].upper() != " ".join(str(original["text"]).split()).upper():
+                updated[index] = dict(original, reviewRequired=True)
             continue
         text = support[0][0]
         if text.upper() == " ".join(str(original["text"]).split()).upper():

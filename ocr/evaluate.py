@@ -16,6 +16,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from receipt_metrics import evaluate_receipt, validate_receipt, summarize_receipts, latency_summary
 
 
 DEFAULT_ENDPOINT = "http://127.0.0.1:8080/api/receipts/extract"
@@ -139,8 +140,10 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def extract_ocr_response(image_path, endpoint=DEFAULT_ENDPOINT, timeout=DEFAULT_TIMEOUT, opener=None):
+def extract_ocr_response(image_path, endpoint=DEFAULT_ENDPOINT, timeout=DEFAULT_TIMEOUT, opener=None, budget_seconds=None):
     validate_endpoint(endpoint)
+    if budget_seconds is not None and (type(budget_seconds) is not int or not 5 <= budget_seconds <= 180):
+        raise ValueError("El presupuesto OCR debe ser un entero entre 5 y 180 segundos")
     path = Path(image_path)
     image_bytes = path.read_bytes()
     if not image_bytes:
@@ -158,6 +161,8 @@ def extract_ocr_response(image_path, endpoint=DEFAULT_ENDPOINT, timeout=DEFAULT_
         "Content-Type": f"multipart/form-data; boundary={boundary}",
         "Accept": "application/json",
     })
+    if budget_seconds is not None:
+        request.add_header("X-OCR-Search-Budget-Seconds", str(budget_seconds))
     if opener is None:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirectHandler())
     try:
@@ -200,17 +205,27 @@ def load_manifest(manifest_path):
         ids.add(case["id"])
         if not isinstance(case.get("image"), str) or not case["image"].strip():
             raise ValueError("Cada case debe indicar una ruta image")
-        if ("expected_text" in case) == ("text_file" in case):
-            raise ValueError("Cada case debe tener expected_text o text_file, exclusivamente")
-        text_key = "expected_text" if "expected_text" in case else "text_file"
-        if not isinstance(case[text_key], str) or (text_key == "text_file" and not case[text_key].strip()):
+        if "expected_text" in case and "text_file" in case:
+            raise ValueError("Usá expected_text o text_file, exclusivamente")
+        text_key = "expected_text" if "expected_text" in case else "text_file" if "text_file" in case else None
+        if text_key and (not isinstance(case[text_key], str) or (text_key == "text_file" and not case[text_key].strip())):
             raise ValueError("expected_text/text_file debe ser un string válido")
+        if text_key is None and "expected_receipt" not in case and "receipt_file" not in case:
+            raise ValueError("Cada case requiere una transcripción o productos verificados")
         if "expected_prices" in case:
             if not isinstance(case["expected_prices"], list):
                 raise ValueError("expected_prices debe ser una lista de importes")
             for price in case["expected_prices"]:
                 canonical_price(price)
         resolved = dict(case, image=path.parent / case["image"])
+        if "expected_receipt" in case and "receipt_file" in case:
+            raise ValueError("Usá expected_receipt o receipt_file, exclusivamente")
+        if "receipt_file" in case:
+            if not isinstance(case["receipt_file"], str) or not case["receipt_file"].strip():
+                raise ValueError("receipt_file debe indicar un archivo JSON")
+            resolved["expected_receipt"] = json.loads((path.parent / case["receipt_file"]).read_text(encoding="utf-8-sig"))
+        if "expected_receipt" in resolved:
+            validate_receipt(resolved["expected_receipt"])
         if "text_file" in case:
             resolved["text_file"] = path.parent / case["text_file"]
         cases.append(resolved)
@@ -219,24 +234,28 @@ def load_manifest(manifest_path):
 
 def summarize(cases):
     successful = [case for case in cases if case.get("status") == "ok"]
-    expected_chars = sum(case["metrics"]["expected_characters"] for case in successful)
-    errors = sum(case["metrics"]["character_errors"] for case in successful)
+    text_cases = [case for case in successful if "metrics" in case]
+    expected_chars = sum(case["metrics"]["expected_characters"] for case in text_cases)
+    errors = sum(case["metrics"]["character_errors"] for case in text_cases)
     summary = {
         "cases": len(cases), "successful_cases": len(successful), "failed_cases": len(cases) - len(successful),
         "elapsed_seconds": round(sum(case["elapsed_seconds"] for case in cases), 6),
         "expected_characters": expected_chars, "character_errors": errors,
-        "character_error_rate": errors / max(1, expected_chars) if successful else None,
+        "text_annotated_cases": len(text_cases),
+        "character_error_rate": errors / max(1, expected_chars) if text_cases else None,
     }
     for field in ("lines", "prices"):
-        metrics = {key: sum(case["metrics"][field][key] for case in successful)
+        metrics = {key: sum(case["metrics"][field][key] for case in text_cases)
                    for key in ("expected", "recognized", "matched", "missing", "additional")}
         metrics["recall"] = metrics["matched"] / metrics["expected"] if metrics["expected"] else None
         metrics["precision"] = metrics["matched"] / metrics["recognized"] if metrics["recognized"] else None
         summary[field] = metrics
+    summary["receipts"] = summarize_receipts([case["receipt"] for case in successful if "receipt" in case])
+    summary["latency_seconds"] = latency_summary([case["request_seconds"] for case in successful if "request_seconds" in case])
     return summary
 
 
-def run_evaluation(cases, endpoint=DEFAULT_ENDPOINT, timeout=DEFAULT_TIMEOUT, extractor=None):
+def run_evaluation(cases, endpoint=DEFAULT_ENDPOINT, timeout=DEFAULT_TIMEOUT, extractor=None, progress=None):
     validate_endpoint(endpoint)
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("El timeout debe ser positivo")
@@ -247,20 +266,27 @@ def run_evaluation(cases, endpoint=DEFAULT_ENDPOINT, timeout=DEFAULT_TIMEOUT, ex
         result = {"id": case["id"]}
         try:
             expected_text = case.get("expected_text")
-            if expected_text is None:
+            if expected_text is None and "text_file" in case:
                 expected_text = case["text_file"].read_text(encoding="utf-8-sig")
             image_hash = hashlib.sha256(case["image"].read_bytes()).hexdigest()
             case_data = json.dumps({
-                "image_sha256": image_hash, "expected_text": normalize_text(expected_text),
+                "image_sha256": image_hash, "expected_text": normalize_text(expected_text) if expected_text is not None else None,
                 "expected_prices": sorted(canonical_price(value) for value in case["expected_prices"])
-                if "expected_prices" in case else extract_prices(expected_text),
+                if "expected_prices" in case else extract_prices(expected_text) if expected_text is not None else None,
+                **({"expected_receipt": case["expected_receipt"]} if "expected_receipt" in case else {}),
             }, ensure_ascii=False, sort_keys=True).encode("utf-8")
             result["case_hash"] = hashlib.sha256(case_data).hexdigest()
+            request_started = time.perf_counter()
             response = extract(case["image"], endpoint, timeout)
+            result["request_seconds"] = round(time.perf_counter() - request_started, 6)
             raw_text = response.get("rawText") if isinstance(response, dict) else response
             if not isinstance(raw_text, str):
                 raise ValueError("La respuesta del backend no contiene rawText como string")
-            result.update(status="ok", metrics=evaluate_text(expected_text, raw_text, case.get("expected_prices")))
+            result["status"] = "ok"
+            if expected_text is not None:
+                result["metrics"] = evaluate_text(expected_text, raw_text, case.get("expected_prices"))
+            if "expected_receipt" in case:
+                result["receipt"] = evaluate_receipt(case["expected_receipt"], response)
             if isinstance(response, dict):
                 if isinstance(response.get("variant"), str):
                     result["variant"] = response["variant"]
@@ -273,6 +299,8 @@ def run_evaluation(cases, endpoint=DEFAULT_ENDPOINT, timeout=DEFAULT_TIMEOUT, ex
             result.update(status="error", error={"type": type(exc).__name__, "message": message})
         result["elapsed_seconds"] = round(time.perf_counter() - started, 6)
         results.append(result)
+        if progress is not None:
+            progress(result)
     return {
         "schema_version": 1, "created_at": datetime.now(timezone.utc).isoformat(), "endpoint": endpoint,
         "normalization": "casefold; espacios consecutivos y líneas vacías normalizados; duplicados conservados",
@@ -306,12 +334,22 @@ def compare_reports(current, previous):
     comparison["current_summary"] = current_summary
     comparison["previous_summary"] = previous_summary
     comparison["deltas"] = {
-        "character_error_rate": current_summary["character_error_rate"] - previous_summary["character_error_rate"],
+        "character_error_rate": (current_summary["character_error_rate"] - previous_summary["character_error_rate"]
+                if current_summary["character_error_rate"] is not None and previous_summary["character_error_rate"] is not None else None),
         "elapsed_seconds": current_summary["elapsed_seconds"] - previous_summary["elapsed_seconds"],
     }
     for field in ("prices", "lines"):
         before, after = previous_summary[field]["recall"], current_summary[field]["recall"]
         comparison["deltas"][field + "_recall"] = after - before if after is not None and before is not None else None
+    before, after = previous_summary["receipts"], current_summary["receipts"]
+    comparison["deltas"]["items_recall"] = (after["items"]["recall"] - before["items"]["recall"]
+            if before["items"]["recall"] is not None and after["items"]["recall"] is not None else None)
+    comparison["deltas"]["fields_accuracy"] = {
+        field: after["fields"][field]["accuracy"] - before["fields"][field]["accuracy"]
+        for field in before["fields"].keys() & after["fields"].keys()}
+    for percentile in ("p50", "p95"):
+        old, new = previous_summary["latency_seconds"][percentile], current_summary["latency_seconds"][percentile]
+        comparison["deltas"][percentile + "_seconds"] = new - old if old is not None and new is not None else None
     return comparison
 
 
@@ -321,6 +359,7 @@ def main(argv=None):
     parser.add_argument("--output", type=Path, default=Path(DEFAULT_OUTPUT))
     parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
+    parser.add_argument("--ocr-budget-seconds", type=int)
     parser.add_argument("--compare", type=Path)
     args = parser.parse_args(argv)
     try:
@@ -329,7 +368,11 @@ def main(argv=None):
         previous = json.loads(args.compare.read_text(encoding="utf-8-sig")) if args.compare else None
         if args.compare is not None:
             compare_reports({"cases": []}, previous)
-        report = run_evaluation(cases, args.endpoint, args.timeout)
+        extractor = None if args.ocr_budget_seconds is None else lambda image, endpoint, timeout: extract_ocr_response(
+            image, endpoint, timeout, budget_seconds=args.ocr_budget_seconds)
+        report = run_evaluation(cases, args.endpoint, args.timeout, extractor=extractor, progress=lambda case:
+                print(f"Caso {case['id']}: {case['status']} ({case['elapsed_seconds']:.2f} s)", flush=True))
+        report["ocr_budget_seconds"] = args.ocr_budget_seconds
         if previous is not None:
             report["comparison"] = compare_reports(report, previous)
         args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -337,7 +380,7 @@ def main(argv=None):
     except (OSError, ValueError, KeyError, TypeError) as exc:
         parser.error(str(exc))
     summary = report["summary"]
-    print(f"Casos correctos: {summary['successful_cases']}/{summary['cases']}; fallidos: {summary['failed_cases']}")
+    print(f"Casos procesados: {summary['successful_cases']}/{summary['cases']}; fallidos: {summary['failed_cases']}")
     print(f"Informe: {args.output}")
     return 1 if summary["failed_cases"] else 0
 

@@ -23,6 +23,21 @@ def alternative(text, fingerprint, frame='crop:0', scale=1, **kwargs):
 
 
 class VariantFusionTest(unittest.TestCase):
+    def test_high_confidence_price_uses_two_stronger_spatially_matched_votes(self):
+        metadata = dict(frame='crop:0', size=(300,200), fingerprint='base')
+        original = [box('2800,00', confidence=.946)]
+        alternatives = [alternative('2600,00', key, confidence=.99) for key in ('a','b')]
+        result, _ = fuse_detections(original, metadata, alternatives)
+        self.assertEqual('2600,00', result[0]['text'])
+        self.assertEqual(original[0]['box'], result[0]['box'])
+        self.assertEqual('2800,00', original[0]['text'])
+        result, _ = fuse_detections(original, metadata, [alternatives[0], alternative('2800,00', 'c', confidence=.99)])
+        self.assertEqual('2800,00', result[0]['text'])
+        self.assertTrue(result[0]['reviewRequired'])
+        result, _ = fuse_detections(original, metadata, alternatives[:1])
+        self.assertEqual('2800,00', result[0]['text'])
+        self.assertTrue(result[0]['reviewRequired'])
+
     def setUp(self):
         self.meta = dict(frame='crop:0', size=(300, 200), fingerprint='base')
 

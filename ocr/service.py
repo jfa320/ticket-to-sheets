@@ -109,7 +109,8 @@ def adaptive_search_enabled():
 
 
 def search_budget_seconds():
-    value = float(os.environ.get("OCR_SEARCH_BUDGET_SECONDS", "90"))
+    override = getattr(OCR_REQUEST_CONTEXT, "budget_seconds", None)
+    value = float(override if override is not None else os.environ.get("OCR_SEARCH_BUDGET_SECONDS", "90"))
     if not math.isfinite(value) or value <= 0:
         raise ValueError("OCR_SEARCH_BUDGET_SECONDS debe ser un número positivo y finito")
     return value
@@ -338,12 +339,13 @@ def run_best_ocr(image, language, debug_dir=None, preview_sink=None):
     readings = {}
     ocr_pass_count = 0
     best_metadata = None
+    best_full_reading = False
     fusion_enabled = variant_fusion_enabled()
 
     options = dict(document_corrections=image_corrections_enabled(), with_metadata=True, geometry_cache={})
     if adaptive:
         variants = search.variants(lambda rotation: build_variants(
-            image, debug_dir, save_debug_image, rotations=(rotation,), prioritize_corrections=True, **options
+            image, debug_dir, save_debug_image, rotations=(rotation,), prioritize_corrections=True, probe_orientation=True, **options
         ))
     else:
         variants = build_variants(image, debug_dir, save_debug_image, **options)
@@ -402,13 +404,16 @@ def run_best_ocr(image, language, debug_dir=None, preview_sink=None):
                 "detections": detections,
                 "lines": lines,
             })
-            if score > best_score:
+            is_probe = bool(metadata and metadata.get("probe"))
+            if score >= 0 and ((not is_probe and not best_full_reading)
+                    or ((not is_probe or not best_full_reading) and score > best_score)):
                 best_score = score
                 best_lines = lines
                 best_detections = detections
                 best_name = name
                 best_variant = variant
                 best_metadata = metadata
+                best_full_reading = not is_probe
             if adaptive:
                 search.observe(lines, score, metadata)
                 if search.complete:
@@ -431,6 +436,8 @@ def run_best_ocr(image, language, debug_dir=None, preview_sink=None):
         try:
             fused, statistics = fuse_detections(best_detections, best_metadata, evidence)
             fusion_summary.update(statistics)
+            if fused != best_detections:
+                best_detections = fused
             if statistics["acceptedRegions"]:
                 fused_lines = merge_boxes_into_rows(fused)
                 fused_score = score_lines(fused_lines)
@@ -460,6 +467,8 @@ def run_best_ocr(image, language, debug_dir=None, preview_sink=None):
                 best_variant, best_detections, lambda region: recognize_block(ocr, region), **retry_options
             )
             retry_summary.update(statistics)
+            if refined != best_detections:
+                best_detections = refined
             if statistics["acceptedRegions"]:
                 # Keep boxes in the selected variant's coordinate system.
                 # Rebuild every derived field before serializing/debugging.
@@ -518,6 +527,13 @@ def ocr_endpoint():
         return jsonify({"error": "No se recibio imagen"}), 400
 
     extraction_id = request.headers.get("X-Extraction-Id")
+    budget_header = request.headers.get("X-OCR-Search-Budget-Seconds")
+    try:
+        budget_override = int(budget_header) if budget_header is not None else None
+        if budget_override is not None and not 5 <= budget_override <= 180:
+            raise ValueError()
+    except ValueError:
+        return jsonify({"error": "El presupuesto OCR debe ser un entero entre 5 y 180 segundos."}), 400
     if extraction_id is not None and not valid_extraction_id(extraction_id):
         return jsonify({"error": "El identificador de extracción no es válido."}), 400
 
@@ -538,6 +554,7 @@ def ocr_endpoint():
             # Nunca ejecutar dos lecturas nativas sobre la misma instancia PaddleOCR.
             OCR_REQUEST_CONDITION.wait()
     OCR_REQUEST_CONTEXT.cancelled = cancelled
+    OCR_REQUEST_CONTEXT.budget_seconds = budget_override
 
     language = request.headers.get("X-OCR-Language", "es")
 
@@ -575,6 +592,7 @@ def ocr_endpoint():
         return jsonify({"error": str(exc)}), 500
     finally:
         del OCR_REQUEST_CONTEXT.cancelled
+        del OCR_REQUEST_CONTEXT.budget_seconds
         with OCR_REQUEST_CONDITION:
             OCR_ACTIVE_REQUEST = None
             OCR_PROCESSING_LOCK.release()
@@ -607,4 +625,4 @@ def health_endpoint():
 
 if __name__ == "__main__":
     threading.Thread(target=warmup_default_ocr, daemon=True).start()
-    app.run(host=os.environ.get("OCR_BIND_HOST", "127.0.0.1"), port=5000)
+    app.run(host=os.environ.get("OCR_BIND_HOST", "127.0.0.1"), port=int(os.environ.get("OCR_BIND_PORT", "5000")))

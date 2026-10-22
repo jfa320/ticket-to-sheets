@@ -33,6 +33,38 @@ def ink_detection(region, text="1200,00", confidence=0.94):
 
 
 class TargetedRetryTest(unittest.TestCase):
+    def test_slanted_adjacent_price_polygons_are_reread_without_mixing_rows(self):
+        image = Image.new('RGB', (1000,900), 'white')
+        polygons = [[[818,679],[920,674],[921,702],[819,706]],
+                    [[820,709],[921,705],[922,732],[821,737]],
+                    [[822,740],[922,736],[923,764],[823,768]]]
+        items = []
+        draw = ImageDraw.Draw(image)
+        for index, points in enumerate(polygons):
+            # Simulated ink is inset from the detector polygon, as on a receipt.
+            draw.polygon([(x,y + (2 if n < 2 else -2)) for n,(x,y) in enumerate(points)], fill=(60,60,60))
+            bounds = (min(p[0] for p in points),min(p[1] for p in points),max(p[0] for p in points),max(p[1] for p in points))
+            item = detection(['2000,00','2800,00','1700,00'][index],bounds,.946 if index == 1 else 1)
+            item['box'] = points; items.append(item)
+        before = copy.deepcopy(items)
+        result, summary = refine_detections(image,items,lambda region:[ink_detection(region,'2600,00',.99)])
+        self.assertEqual(1,summary['attemptedRegions'])
+        self.assertEqual('2600,00',result[1]['text'])
+        self.assertEqual(before,items)
+        self.assertEqual(before[1]['box'],result[1]['box'])
+        self.assertEqual(before[0],result[0]); self.assertEqual(before[2],result[2])
+
+    def test_fused_damaged_date_label_can_be_split_only_with_valid_two_read_consensus(self):
+        original = detection("Fecha25/c902", confidence=.785)
+        result, summary = refine_detections(image_with_boxes(), [original],
+                lambda region: [ink_detection(region, "Fecha 25/09/2026", .99)])
+        self.assertEqual("Fecha 25/09/2026", result[0]["text"])
+        self.assertEqual(original["box"], result[0]["box"])
+        self.assertEqual(1, summary["acceptedRegions"])
+        result, _ = refine_detections(image_with_boxes(), [original],
+                lambda region: [ink_detection(region, "Fecha 31/09/2026", .99)])
+        self.assertEqual(original, result[0])
+
     def test_native_pixels_are_reread_but_boxes_remain_in_the_selected_coordinate_frame(self):
         selected = image_with_boxes()
         native = selected.resize((600, 600), Image.Resampling.NEAREST)
@@ -68,8 +100,14 @@ class TargetedRetryTest(unittest.TestCase):
             with self.subTest(confidence=confidence):
                 result, summary = refine_detections(image_with_boxes(), [original],
                                                     lambda region: [ink_detection(region, "2600,00", confidence)])
-                self.assertEqual(original, result[0])
+                self.assertEqual(dict(original, reviewRequired=True), result[0])
                 self.assertEqual(0, summary["acceptedRegions"])
+
+    def test_unconfirmed_price_is_flagged_even_when_the_budget_prevents_a_second_read(self):
+        original = detection('2800,00',confidence=.946)
+        result, stats = refine_detections(image_with_boxes(),[original],lambda region:[],should_continue=lambda:False)
+        self.assertEqual(dict(original,reviewRequired=True),result[0])
+        self.assertEqual(0,stats['ocrCalls'])
 
     def test_truncated_date_is_reread_before_other_uncertain_text_and_must_be_valid(self):
         boxes = ((40, 40, 180, 60), (40, 110, 180, 130))

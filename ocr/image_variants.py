@@ -74,7 +74,8 @@ def _illumination_candidates(image, suffix):
 
 
 def build_variants(image, debug_dir=None, save_debug_image=None, document_corrections=True, with_metadata=False,
-                   rotations=(0, 90, 270, 180), prioritize_corrections=False, geometry_cache=None):
+                   rotations=(0, 90, 270, 180), prioritize_corrections=False, geometry_cache=None,
+                   probe_orientation=False):
     """Yield one candidate at a time; debug output is supplied by the caller."""
     source = image if image.mode == "RGB" else image.convert("RGB")
     geometry_cache = {} if geometry_cache is None else geometry_cache
@@ -112,6 +113,12 @@ def build_variants(image, debug_dir=None, save_debug_image=None, document_correc
         # Preserve color and faint printing even if cropping/contrast is harmful.
         bounded_original = limit_image_size(oriented)
         full_frame, crop_frame, geometry_frame = f"full:{rotation}", f"crop:{rotation}", f"geometry:{rotation}"
+        if probe_orientation:
+            probe = limit_image_size(oriented, 700, 1_000_000)
+            if with_metadata:
+                yield f"probe-{suffix}", probe, {"frame": full_frame, "size": probe.size, "probe": True}
+            else:
+                yield f"probe-{suffix}", probe
         yield pack(f"original-{suffix}", bounded_original, full_frame)
 
         if document_corrections and prioritize_corrections:

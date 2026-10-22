@@ -14,6 +14,21 @@ from image_variants import MAX_PIXELS, MAX_SHORT_SIDE, build_variants, crop_rece
 
 
 class ImageVariantsTest(unittest.TestCase):
+    def test_small_orientation_probe_is_bounded_and_does_not_replace_full_candidate(self):
+        image = Image.new("RGB", (1600, 2400), "white")
+        candidates = build_variants(image, rotations=(90,), probe_orientation=True, with_metadata=True)
+        name, probe, metadata = next(candidates)
+        self.assertEqual("probe-rot90", name)
+        self.assertTrue(metadata["probe"])
+        self.assertEqual("full:90", metadata["frame"])
+        self.assertLessEqual(min(probe.size), 700)
+        self.assertLessEqual(probe.width * probe.height, 1_000_000)
+        name, full, metadata = next(candidates)
+        self.assertEqual("original-rot90", name)
+        self.assertNotIn("probe", metadata)
+        self.assertGreater(full.width * full.height, probe.width * probe.height)
+        candidates.close()
+
     def test_search_can_probe_one_orientation_then_full_illumination_before_crops(self):
         image = Image.new("RGB", (80, 120), "white")
         with patch("image_variants.illumination_variants",
