@@ -30,6 +30,7 @@ App local para subir una foto o PDF de un ticket, correr OCR gratis con PaddleOC
 - muestra una tabla editable para corregir o eliminar filas antes de copiar
 - conserva el ticket actual y sus ediciones mientras procesa otro archivo; si la nueva extracción falla, mantiene el total, las salidas y la revisión OCR anteriores
 - avisa antes de cerrar o recargar la página si el ticket no se copió ni se cargó correctamente, o si después hubo cambios pendientes
+- cancela la extracción en curso al recargar o salir de la página; descarta el resultado anterior y permite procesar otra factura. Si PaddleOCR está dentro de una llamada nativa, espera su finalización y no inicia más pasadas ni páginas del trabajo cancelado
 - permite guardar un destino de Google Sheets y cargar las filas seleccionadas con un botón, mediante una cuenta de servicio
 - marca filas ambiguas y muestra advertencias completas cuando una línea no pudo confirmarse
 - aprende de tus correcciones (marca, categoría y descripción) y las aplica en el próximo ticket del mismo comercio

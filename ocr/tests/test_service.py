@@ -440,6 +440,128 @@ class OcrServiceTest(unittest.TestCase):
             self.assertEqual(200, post_image().status_code)
             self.assertEqual(2, engine.call_count)
 
+    def test_refresh_cancels_remaining_variants_and_next_request_waits_for_native_read(self):
+        image = Image.new("RGB", (20, 40), "white")
+        output = BytesIO()
+        image.save(output, "PNG")
+        started = threading.Event()
+        finish = threading.Event()
+        next_started = threading.Event()
+        items = [detection("PRODUCTO 1200,00", 10, 30, 0.95)]
+        calls = []
+
+        def recognize(*args):
+            current_id = self.service.OCR_ACTIVE_REQUEST[0]
+            calls.append(current_id)
+            if current_id == "old-id":
+                started.set()
+                if not finish.wait(5):
+                    raise AssertionError("No se liberó la llamada nativa")
+            else:
+                self.assertTrue(finish.is_set(), "no se solapan lecturas de PaddleOCR")
+            return items, items
+
+        def post_image(extraction_id):
+            with self.service.app.test_client() as client:
+                if extraction_id == "new-id":
+                    next_started.set()
+                return client.post("/ocr", data=output.getvalue(), content_type="image/png",
+                                   headers={"X-Extraction-Id": extraction_id})
+
+        with patch.dict(self.service.OCR_CACHE, {self.service.DEFAULT_LANGUAGE: Mock()}), \
+                patch.dict(os.environ, {"APP_OCR_DEBUG": "false", "OCR_ADAPTIVE_SEARCH": "false",
+                                        "OCR_TARGETED_RETRY": "false"}), \
+                patch.object(self.service, "get_ocr"), \
+                patch.object(self.service, "build_variants", side_effect=lambda *a, **kw: iter([
+                    ("first", image), ("remaining", image)])), \
+                patch.object(self.service, "ocr_image", side_effect=recognize), \
+                ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(post_image, "old-id")
+            try:
+                self.assertTrue(started.wait(5))
+                client = self.service.app.test_client()
+                # Otra pestaña / beacon viejo no puede interrumpir la factura activa.
+                self.assertEqual(200, client.post("/ocr/cancel?extractionId=unrelated-id").status_code)
+                self.assertFalse(client.get("/health").json["ocrCancelling"])
+                self.assertEqual(200, client.post("/ocr/cancel?extractionId=old-id").status_code)
+                self.assertTrue(client.get("/health").json["ocrCancelling"])
+                second = executor.submit(post_image, "new-id")
+                self.assertTrue(next_started.wait(5))
+                self.assertFalse(second.done())
+                self.assertEqual(["old-id"], calls)
+            finally:
+                finish.set()
+            self.assertEqual(409, first.result(timeout=5).status_code)
+            self.assertEqual(200, second.result(timeout=5).status_code)
+            self.assertEqual(["old-id", "new-id", "new-id"], calls)
+            self.assertFalse(client.get("/health").json["ocrBusy"])
+
+    def test_cancellation_before_upload_is_idempotent_and_rejects_that_upload(self):
+        output = BytesIO()
+        Image.new("RGB", (20, 40), "white").save(output, "PNG")
+        items = [detection("PRODUCTO 1200,00", 10, 30, 0.95)]
+        with patch.dict(self.service.OCR_CACHE, {self.service.DEFAULT_LANGUAGE: Mock()}), \
+                patch.dict(os.environ, {"APP_OCR_DEBUG": "false"}), \
+                patch.object(self.service, "run_best_ocr", return_value=("original", items, items, 42.0)) as engine:
+            client = self.service.app.test_client()
+            for _ in range(2):
+                self.assertEqual(200, client.post("/ocr/cancel?extractionId=old-id").status_code)
+            self.assertEqual(409, client.post("/ocr", data=output.getvalue(),
+                                             headers={"X-Extraction-Id": "old-id"}).status_code)
+            engine.assert_not_called()
+            self.assertEqual(200, client.post("/ocr", data=output.getvalue(),
+                                             headers={"X-Extraction-Id": "new-id"}).status_code)
+            self.assertFalse(client.get("/health").json["ocrBusy"])
+
+    def test_cancellation_during_targeted_retry_stops_before_another_model_call(self):
+        image = Image.new("RGB", (200, 100), "white")
+        items = [detection("LECH3 1200,00", 10, 30, .65)]
+        cancelled = threading.Event()
+        self.service.OCR_REQUEST_CONTEXT.cancelled = cancelled
+
+        def retry(image, detections, recognize, should_continue=None):
+            self.assertTrue(should_continue())
+            cancelled.set()
+            should_continue()
+            self.fail("La relectura no debe continuar después de cancelar")
+
+        try:
+            with patch.object(self.service, "get_ocr"), \
+                    patch.object(self.service, "build_variants", return_value=iter([("first", image)])), \
+                    patch.object(self.service, "ocr_image", return_value=(items, items)), \
+                    patch.object(self.service, "refine_detections", side_effect=retry), \
+                    patch.dict(os.environ, {"OCR_ADAPTIVE_SEARCH": "false", "OCR_TARGETED_RETRY": "true"}):
+                with self.assertRaises(self.service.OcrCancelled):
+                    self.service.run_best_ocr(image, "es")
+        finally:
+            del self.service.OCR_REQUEST_CONTEXT.cancelled
+
+    def test_cancelled_native_read_cleans_up_its_temporary_image(self):
+        cancelled = threading.Event()
+        self.service.OCR_REQUEST_CONTEXT.cancelled = cancelled
+        paths = []
+
+        def recognize(path, **kwargs):
+            paths.append(path)
+            self.assertTrue(os.path.isfile(path))
+            cancelled.set()
+            return []
+
+        try:
+            model = Mock()
+            model.ocr.side_effect = recognize
+            with self.assertRaises(self.service.OcrCancelled):
+                self.service.recognize_block(model, Image.new("RGB", (10, 10), "white"))
+            self.assertEqual(1, model.ocr.call_count)
+            self.assertFalse(os.path.exists(paths[0]))
+        finally:
+            del self.service.OCR_REQUEST_CONTEXT.cancelled
+
+    def test_invalid_cancellation_ids_are_rejected(self):
+        client = self.service.app.test_client()
+        self.assertEqual(400, client.post("/ocr/cancel").status_code)
+        self.assertEqual(400, client.post("/ocr/cancel?extractionId=invalid/id").status_code)
+
     def test_processing_failure_releases_engine_for_retry(self):
         output = BytesIO()
         Image.new("RGB", (20, 40), "white").save(output, "PNG")

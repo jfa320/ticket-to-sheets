@@ -15,10 +15,14 @@ async function request(url, options, errorMessage) {
     try {
         response = await fetch(url, options);
     } catch (error) {
+        if (error.name === 'AbortError') throw error;
         console.error('[facturas] Error de red', {url, error});
         throw new Error('No se pudo conectar con la aplicación. Revisá la conexión y reintentá.');
     }
-    const payload = await response.json().catch(() => null);
+    const payload = await response.json().catch(error => {
+        if (error.name === 'AbortError') throw error;
+        return null;
+    });
     if (!response.ok) {
         console.error('[facturas] Error de API', {url, status: response.status, payload});
         throw new Error(`${payload?.message || errorMessage}${payload?.requestId ? ` (id: ${payload.requestId})` : ''}`);
@@ -30,10 +34,22 @@ async function request(url, options, errorMessage) {
     return payload;
 }
 
-export function extractReceipt(file) {
+export function extractReceipt(file, {extractionId, signal} = {}) {
     const data = new FormData();
     data.append('file', file);
-    return request('/api/receipts/extract', {method: 'POST', body: data}, 'No se pudo procesar la factura.');
+    return request('/api/receipts/extract', {
+        method: 'POST', body: data, signal,
+        headers: extractionId ? {'X-Extraction-Id': extractionId} : {}
+    }, 'No se pudo procesar la factura.');
+}
+
+export function cancellationUrl(extractionId) {
+    return `/api/receipts/cancel?extractionId=${encodeURIComponent(extractionId)}`;
+}
+
+export function cancelReceipt(extractionId) {
+    return request(cancellationUrl(extractionId), {method: 'POST', keepalive: true},
+        'No se pudo cancelar el procesamiento anterior.');
 }
 
 export function saveCorrections(batch) {

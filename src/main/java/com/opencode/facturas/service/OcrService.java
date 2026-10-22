@@ -23,7 +23,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 @Service
 public class OcrService {
@@ -39,7 +40,9 @@ public class OcrService {
     private final long maxImagePixels;
     private final int maxImageSide;
     private final boolean nativePdfTextEnabled;
-    private final AtomicBoolean extractionInProgress = new AtomicBoolean();
+    private final Object extractionMonitor = new Object();
+    private final Map<String, Long> cancelledExtractions = new LinkedHashMap<>();
+    private ExtractionTask activeExtraction;
 
     @Autowired
     public OcrService(
@@ -103,21 +106,81 @@ public class OcrService {
     }
 
     public OcrResult extract(MultipartFile file) {
-        if (!extractionInProgress.compareAndSet(false, true)) {
-            throw new ExtractionBusyException();
-        }
+        return extract(file, null);
+    }
+
+    public OcrResult extract(MultipartFile file, String extractionId) {
+        if (extractionId != null) validateExtractionId(extractionId);
+        ExtractionTask task = beginExtraction(extractionId);
         try {
-            return extractFile(file);
+            OcrResult result = extractFile(file, task);
+            task.checkCancelled();
+            return result;
         } finally {
-            extractionInProgress.set(false);
+            synchronized (extractionMonitor) {
+                activeExtraction = null;
+                extractionMonitor.notifyAll();
+            }
         }
     }
 
-    private OcrResult extractFile(MultipartFile file) {
+    public void cancelExtraction(String extractionId) {
+        validateExtractionId(extractionId);
+        synchronized (extractionMonitor) {
+            pruneCancelledExtractions();
+            cancelledExtractions.put(extractionId, System.currentTimeMillis());
+            if (activeExtraction != null && extractionId.equals(activeExtraction.id)) {
+                activeExtraction.cancel();
+            }
+            extractionMonitor.notifyAll();
+        }
+        // También registrar en Python si la cancelación llegó antes que la imagen.
+        apiClient.cancel(extractionId);
+    }
+
+    private ExtractionTask beginExtraction(String extractionId) {
+        synchronized (extractionMonitor) {
+            pruneCancelledExtractions();
+            while (true) {
+                if (extractionId != null && cancelledExtractions.containsKey(extractionId)) {
+                    throw new ExtractionCancelledException();
+                }
+                if (activeExtraction == null) {
+                    activeExtraction = new ExtractionTask(extractionId);
+                    return activeExtraction;
+                }
+                if (!activeExtraction.isCancelled()) throw new ExtractionBusyException();
+                // La nueva factura espera la última llamada nativa del trabajo cancelado.
+                try {
+                    extractionMonitor.wait();
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                    throw new ExtractionCancelledException();
+                }
+            }
+        }
+    }
+
+    private void pruneCancelledExtractions() {
+        long oldest = System.currentTimeMillis() - 600_000;
+        cancelledExtractions.values().removeIf(time -> time < oldest);
+        while (cancelledExtractions.size() >= 256) {
+            cancelledExtractions.remove(cancelledExtractions.keySet().iterator().next());
+        }
+    }
+
+    private void validateExtractionId(String extractionId) {
+        if (extractionId == null || !extractionId.matches("[A-Za-z0-9-]{1,64}")) {
+            throw new IllegalArgumentException("El identificador de extracción no es válido.");
+        }
+    }
+
+    private OcrResult extractFile(MultipartFile file, ExtractionTask task) {
         String filename = file.getOriginalFilename() == null ? "archivo" : file.getOriginalFilename().toLowerCase();
         long startedAt = System.nanoTime();
 
         try {
+            task.checkCancelled();
             byte[] bytes = file.getBytes();
             boolean pdf = hasPdfSignature(bytes);
             if (filename.endsWith(".pdf") && !pdf) {
@@ -126,7 +189,7 @@ public class OcrService {
             log.info("Procesando archivo para OCR: formato={}, tamaño={} bytes", pdf ? "PDF" : "imagen", file.getSize());
 
             if (pdf) {
-                OcrResult result = extractFromPdf(bytes);
+                OcrResult result = extractFromPdf(bytes, task);
                 log.info("OCR de PDF completado: páginas={}, texto={} caracteres, variante={}, score={}, duración={} ms",
                         result.pages() == null ? 0 : result.pages().size(), textLength(result), result.variant(),
                         result.score(), elapsedMs(startedAt));
@@ -136,13 +199,16 @@ public class OcrService {
             BufferedImage image = readImage(bytes);
             OcrResult result;
             try {
-                result = processImage(image);
+                result = processImage(image, task);
             } finally {
                 image.flush();
             }
             log.info("OCR de imagen completado: texto={} caracteres, variante={}, score={}, duración={} ms",
                     textLength(result), result.variant(), result.score(), elapsedMs(startedAt));
             return result;
+        } catch (ExtractionCancelledException ex) {
+            log.info("Extracción cancelada: {}", task.id);
+            throw ex;
         } catch (IOException ex) {
             log.error("No se pudo leer el archivo para OCR", ex);
             throw new IllegalStateException("No se pudo leer el archivo subido.", ex);
@@ -152,26 +218,28 @@ public class OcrService {
         }
     }
 
-    private OcrResult extractFromPdf(byte[] bytes) {
+    private OcrResult extractFromPdf(byte[] bytes, ExtractionTask task) {
         log.info("Procesando páginas PDF: {} bytes, texto nativo={}", bytes.length, nativePdfTextEnabled);
         List<OcrResult> pages = new ArrayList<>();
         pdfPageRenderer.forEachPage(bytes, nativePdfTextEnabled, (pageNumber, pageCount, nativeText, image) -> {
+            task.checkCancelled();
             if (nativeText != null) {
                 log.info("Texto nativo de página PDF {}/{}: {} caracteres", pageNumber, pageCount, textLength(nativeText));
                 pages.add(nativeText);
             } else {
                 log.info("Enviando página PDF {}/{} a OCR: {}x{} px", pageNumber, pageCount, image.getWidth(), image.getHeight());
-                pages.add(processImage(image));
+                pages.add(processImage(image, task));
             }
         });
         log.info("PDF renderizado y procesado: {} páginas", pages.size());
         return mergePageResults(pages);
     }
 
-    private OcrResult processImage(BufferedImage source) {
+    private OcrResult processImage(BufferedImage source, ExtractionTask task) {
+        task.checkCancelled();
         BufferedImage prepared = prepareImage(source);
         try {
-            return runPaddle(prepared);
+            return runPaddle(prepared, task);
         } finally {
             prepared.flush();
         }
@@ -232,9 +300,10 @@ public class OcrService {
         return false;
     }
 
-    private OcrResult runPaddle(BufferedImage image) {
+    private OcrResult runPaddle(BufferedImage image, ExtractionTask task) {
         try {
-            String output = apiClient.recognize(image);
+            String output = task.id == null ? apiClient.recognize(image) : apiClient.recognize(image, task);
+            task.checkCancelled();
             OcrResult result = resultMapper.parse(output);
             if (result.text() == null || result.text().isBlank()) {
                 throw new IllegalStateException("PaddleOCR no detecto texto util en la factura.");

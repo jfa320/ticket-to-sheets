@@ -3,6 +3,7 @@ package com.opencode.facturas.controller;
 import com.opencode.facturas.service.OcrService;
 import com.opencode.facturas.service.ReceiptParserService;
 import com.opencode.facturas.service.ExtractionBusyException;
+import com.opencode.facturas.service.ExtractionCancelledException;
 import com.opencode.facturas.service.OcrUnavailableException;
 import org.springframework.mock.web.MockMultipartFile;
 import org.junit.jupiter.api.Test;
@@ -13,6 +14,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
 import static org.mockito.ArgumentMatchers.any;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -60,6 +62,24 @@ class ReceiptHttpErrorsTest {
                         .file(new MockMultipartFile("file", "ticket.png", "image/png", new byte[]{1})))
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.message").value("El OCR está preparando los modelos."));
+        verifyNoInteractions(parser);
+    }
+
+    @Test void refreshCancellationTargetsOnlyTheProvidedExtraction() throws Exception {
+        mvc.perform(post("/api/receipts/cancel").param("extractionId", "old-id"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.cancelled").value(true));
+        verify(ocr).cancelExtraction("old-id");
+        verifyNoInteractions(parser);
+    }
+
+    @Test void cancelledUploadNeverReachesTheReceiptParser() throws Exception {
+        when(ocr.extract(any(), org.mockito.ArgumentMatchers.eq("old-id")))
+                .thenThrow(new ExtractionCancelledException());
+        mvc.perform(multipart("/api/receipts/extract")
+                        .file(new MockMultipartFile("file", "ticket.png", "image/png", new byte[]{1}))
+                        .header("X-Extraction-Id", "old-id"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("Se canceló el procesamiento de la factura."));
         verifyNoInteractions(parser);
     }
 }

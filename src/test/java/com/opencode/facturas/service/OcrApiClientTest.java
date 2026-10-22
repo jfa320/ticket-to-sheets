@@ -191,6 +191,43 @@ class OcrApiClientTest {
         verify(restTemplate).postForEntity(eq(OCR_URI), any(HttpEntity.class), eq(String.class));
     }
 
+    @Test
+    void forwardsExtractionIdAndWaitsInPythonWhenThePreviousReadIsCancelling() {
+        RestTemplate restTemplate = mock(RestTemplate.class);
+        when(restTemplate.getForEntity(HEALTH_URI, String.class))
+                .thenReturn(ResponseEntity.ok("{\"ocrReady\":true,\"ocrBusy\":true,\"ocrCancelling\":true}"));
+        when(restTemplate.postForEntity(eq(OCR_URI), any(HttpEntity.class), eq(String.class)))
+                .thenReturn(ResponseEntity.ok("new-result"));
+        assertThat(client(restTemplate, 1, ignored -> {}).recognize(
+                new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB), new ExtractionTask("new-id")))
+                .isEqualTo("new-result");
+        ArgumentCaptor<HttpEntity> request = ArgumentCaptor.forClass(HttpEntity.class);
+        verify(restTemplate).postForEntity(eq(OCR_URI), request.capture(), eq(String.class));
+        assertThat(request.getValue().getHeaders().getFirst("X-Extraction-Id")).isEqualTo("new-id");
+    }
+
+    @Test
+    void cancellationUsesTheShortTimeoutClientRatherThanTheBusyExtractionConnection() {
+        RestTemplate extractionClient = mock(RestTemplate.class);
+        RestTemplate controlClient = mock(RestTemplate.class);
+        OcrApiClient client = new OcrApiClient(new ObjectMapper(), extractionClient, controlClient,
+                OCR_ENDPOINT, HEALTH_ENDPOINT, "es", 1, ignored -> {});
+        client.cancel("old-id");
+        verify(controlClient).postForEntity(URI.create(OCR_ENDPOINT + "/cancel?extractionId=old-id"), null, String.class);
+        verifyNoInteractions(extractionClient);
+    }
+
+    @Test
+    void cancelledTaskDoesNotSendAnotherOcrRequest() {
+        RestTemplate restTemplate = mock(RestTemplate.class);
+        ExtractionTask task = new ExtractionTask("old-id");
+        task.cancel();
+        assertThatThrownBy(() -> client(restTemplate, 1, ignored -> {}).recognize(
+                new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB), task))
+                .isInstanceOf(ExtractionCancelledException.class);
+        verifyNoInteractions(restTemplate);
+    }
+
     private OcrApiClient client(RestTemplate restTemplate, int maxAttempts, List<Integer> waits) {
         return client(restTemplate, maxAttempts, waits::add);
     }

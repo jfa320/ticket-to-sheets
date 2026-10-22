@@ -10,10 +10,12 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.util.Map;
 
 @Validated
 @RestController
@@ -31,14 +33,15 @@ public class ReceiptController {
     }
 
     @PostMapping(value = "/extract", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ExtractResponse extract(@RequestParam(value = "file", required = false) MultipartFile file) {
+    public ExtractResponse extract(@RequestParam(value = "file", required = false) MultipartFile file,
+                                   @RequestHeader(value = "X-Extraction-Id", required = false) String extractionId) {
         if (file == null || file.isEmpty()) {
             log.warn("Extracción rechazada: no se recibió un archivo");
             throw new IllegalArgumentException("Subi una imagen o PDF de la factura.");
         }
 
         log.info("Iniciando extracción: tipo={}, tamaño={} bytes", file.getContentType(), file.getSize());
-        OcrResult ocrResult = ocrService.extract(file);
+        OcrResult ocrResult = extractionId == null ? ocrService.extract(file) : ocrService.extract(file, extractionId);
         ExtractResponse response = parserService.parse(ocrResult)
                 .withOcrMetadata(ocrResult.variant(), ocrResult.score())
                 .withOcrReview(OcrReviewMapper.pages(ocrResult));
@@ -48,5 +51,11 @@ public class ReceiptController {
                 response.items() == null ? 0 : response.items().size(),
                 response.warnings() == null ? 0 : response.warnings().size());
         return response;
+    }
+
+    @PostMapping("/cancel")
+    public Map<String, Boolean> cancel(@RequestParam String extractionId) {
+        ocrService.cancelExtraction(extractionId);
+        return Map.of("cancelled", true);
     }
 }

@@ -27,6 +27,8 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 class OcrServiceTest {
 
@@ -215,6 +217,96 @@ class OcrServiceTest {
 
         assertThatThrownBy(() -> service.extract(file)).isInstanceOf(OcrUnavailableException.class);
         assertThat(service.extract(file)).isSameAs(expected);
+    }
+
+    @Test
+    void refreshCancellationDiscardsOldResultAndLetsTheNextExtractionWaitForRelease() throws Exception {
+        OcrResultMapper mapper = mock(OcrResultMapper.class);
+        OcrApiClient client = mock(OcrApiClient.class);
+        OcrService service = new OcrService(mapper, client, mock(PdfPageRenderer.class));
+        MockMultipartFile file = new MockMultipartFile("file", "ticket.png", "image/png", pngBytes(1, 1));
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch finish = new CountDownLatch(1);
+        CountDownLatch nextStarted = new CountDownLatch(1);
+        OcrResult expected = new OcrResult("NUEVO 100,00", List.of(), List.of(), "original", 1.0);
+        when(client.recognize(any(BufferedImage.class), any(ExtractionTask.class))).thenAnswer(invocation -> {
+            ExtractionTask task = invocation.getArgument(1);
+            if (task.id.equals("old-id")) {
+                started.countDown();
+                if (!finish.await(5, TimeUnit.SECONDS)) throw new AssertionError("Extracción bloqueada");
+                return "old-result";
+            }
+            assertThat(finish.getCount()).isZero();
+            return "new-result";
+        });
+        when(mapper.parse("new-result")).thenReturn(expected);
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var first = executor.submit(() -> service.extract(file, "old-id"));
+            assertThat(started.await(5, TimeUnit.SECONDS)).isTrue();
+            service.cancelExtraction("old-id");
+            var next = executor.submit(() -> { nextStarted.countDown(); return service.extract(file, "new-id"); });
+            assertThat(nextStarted.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThat(next.isDone()).isFalse();
+            finish.countDown();
+            assertThatThrownBy(() -> first.get(5, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(ExtractionCancelledException.class);
+            assertThat(next.get(5, TimeUnit.SECONDS)).isSameAs(expected);
+            verify(client).cancel("old-id");
+            verify(mapper, never()).parse("old-result");
+        } finally {
+            finish.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void cancellationBeforeUploadPreventsItFromStartingAndDoesNotAffectAnotherId() throws Exception {
+        OcrResultMapper mapper = mock(OcrResultMapper.class);
+        OcrApiClient client = mock(OcrApiClient.class);
+        OcrService service = new OcrService(mapper, client, mock(PdfPageRenderer.class));
+        MockMultipartFile file = new MockMultipartFile("file", "ticket.png", "image/png", pngBytes(1, 1));
+        service.cancelExtraction("old-id");
+        service.cancelExtraction("old-id");
+        assertThatThrownBy(() -> service.extract(file, "old-id")).isInstanceOf(ExtractionCancelledException.class);
+        verifyNoInteractions(mapper);
+        OcrResult expected = new OcrResult("NUEVO 100,00", List.of(), List.of(), "original", 1.0);
+        when(client.recognize(any(BufferedImage.class), any(ExtractionTask.class))).thenAnswer(invocation -> {
+            service.cancelExtraction("old-id"); // Un beacon tardío no cancela new-id.
+            return "new-result";
+        });
+        when(mapper.parse("new-result")).thenReturn(expected);
+        assertThat(service.extract(file, "new-id")).isSameAs(expected);
+    }
+
+    @Test
+    void cancellingAPdfStopsBeforeSendingTheRemainingPages() throws Exception {
+        OcrResultMapper mapper = mock(OcrResultMapper.class);
+        OcrApiClient client = mock(OcrApiClient.class);
+        PdfPageRenderer renderer = mock(PdfPageRenderer.class);
+        OcrService service = new OcrService(mapper, client, renderer);
+        doAnswer(invocation -> {
+            PdfPageRenderer.HybridPageProcessor processor = invocation.getArgument(2);
+            BufferedImage image = new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB);
+            processor.process(1, 2, null, image);
+            processor.process(2, 2, null, image);
+            return null;
+        }).when(renderer).forEachPage(any(), anyBoolean(), any());
+        when(client.recognize(any(BufferedImage.class), any(ExtractionTask.class))).thenAnswer(invocation -> {
+            service.cancelExtraction("pdf-id");
+            return "discarded";
+        });
+        assertThatThrownBy(() -> service.extract(
+                new MockMultipartFile("file", "ticket.pdf", "application/pdf", pdfWithPages(2)), "pdf-id"))
+                .isInstanceOf(ExtractionCancelledException.class);
+        verify(client, times(1)).recognize(any(BufferedImage.class), any(ExtractionTask.class));
+        verifyNoInteractions(mapper);
+    }
+
+    @Test
+    void rejectsInvalidCancellationIds() {
+        OcrService service = new OcrService(mock(OcrResultMapper.class), mock(OcrApiClient.class), mock(PdfPageRenderer.class));
+        assertThatThrownBy(() -> service.cancelExtraction("../other?job=1")).isInstanceOf(IllegalArgumentException.class);
     }
 
     private byte[] pngBytes(int width, int height) throws Exception {

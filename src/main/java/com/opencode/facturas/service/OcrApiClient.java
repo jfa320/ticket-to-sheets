@@ -95,13 +95,19 @@ class OcrApiClient {
     }
 
     String recognize(BufferedImage image) {
-        ensureReady();
+        return recognize(image, new ExtractionTask(null));
+    }
+
+    String recognize(BufferedImage image, ExtractionTask task) {
+        ensureReady(task);
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.IMAGE_PNG);
         headers.setAccept(List.of(MediaType.APPLICATION_JSON));
         headers.set("X-OCR-Language", language);
+        if (task.id != null) headers.set("X-Extraction-Id", task.id);
 
         HttpEntity<byte[]> request = new HttpEntity<>(toPngBytes(image), headers);
+        task.checkCancelled();
         try {
             // No repetir una lectura tras perder la respuesta: Python puede seguir procesándola.
             ResponseEntity<String> response = restTemplate.postForEntity(URI.create(endpoint), request, String.class);
@@ -117,6 +123,9 @@ class OcrApiClient {
             }
             throw new OcrUnavailableException("Se perdió la conexión con el OCR. La lectura puede seguir en curso; revisá el servicio y esperá antes de reintentar.", ex);
         } catch (HttpStatusCodeException ex) {
+            if (ex.getStatusCode().value() == 409) {
+                throw new ExtractionCancelledException();
+            }
             if (ex.getStatusCode().value() == 429) {
                 throw new ExtractionBusyException();
             }
@@ -132,8 +141,17 @@ class OcrApiClient {
         }
     }
 
-    private void ensureReady() {
+    void cancel(String extractionId) {
+        try {
+            healthRestTemplate.postForEntity(URI.create(endpoint + "/cancel?extractionId=" + extractionId), null, String.class);
+        } catch (RestClientException ex) {
+            throw new OcrUnavailableException("No se pudo confirmar la cancelación con el OCR local. Reintentá.", ex);
+        }
+    }
+
+    private void ensureReady(ExtractionTask task) {
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            task.checkCancelled();
             try {
                 waitForHealth();
                 return;
@@ -157,7 +175,7 @@ class OcrApiClient {
             if (!health.path("ocrReady").asBoolean(false)) {
                 throw new OcrUnavailableException("El OCR está preparando los modelos. Esperá a que termine y reintentá.", null);
             }
-            if (health.path("ocrBusy").asBoolean(false)) {
+            if (health.path("ocrBusy").asBoolean(false) && !health.path("ocrCancelling").asBoolean(false)) {
                 throw new ExtractionBusyException();
             }
             log.debug("Healthcheck OCR OK");

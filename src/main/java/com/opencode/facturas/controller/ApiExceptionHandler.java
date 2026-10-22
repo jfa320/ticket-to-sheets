@@ -1,6 +1,7 @@
 package com.opencode.facturas.controller;
 
 import com.opencode.facturas.service.ExtractionBusyException;
+import com.opencode.facturas.service.ExtractionCancelledException;
 import com.opencode.facturas.service.OcrUnavailableException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -62,6 +63,11 @@ public class ApiExceptionHandler {
     public ResponseEntity<Map<String, String>> handleBusy(ExtractionBusyException ex) {
         return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
                 .body(errorBody(ex.getMessage()));
+    }
+
+    @ExceptionHandler(ExtractionCancelledException.class)
+    public ResponseEntity<Map<String, String>> handleCancelled(ExtractionCancelledException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(errorBody(ex.getMessage()));
     }
 
     @ExceptionHandler(OcrUnavailableException.class)

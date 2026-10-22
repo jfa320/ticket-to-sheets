@@ -51,7 +51,7 @@ class OcrReviewTest {
         var file = new MockMultipartFile("file", "synthetic.pdf", "application/pdf", new byte[]{1});
         when(ocr.extract(file)).thenReturn(combined);
         when(parser.parse(combined)).thenReturn(new ExtractResponse("Mercado", "1/1/2026", 0, "", "", "", combined.text(), List.of()));
-        ExtractResponse response = new ReceiptController(ocr, parser).extract(file);
+        ExtractResponse response = new ReceiptController(ocr, parser).extract(file, null);
         assertThat(response.ocrReview()).hasSize(2);
         assertThat(response.ocrReview().get(0).pageNumber()).isEqualTo(1);
         assertThat(response.ocrReview().get(0).detections()).containsExactly(uncertain);

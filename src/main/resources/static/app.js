@@ -2,7 +2,8 @@ import {
     createReceipt, buildExports, buildExportItems, formatTotal, validationErrors, toDateInputValue, formatDateForItems,
     calculateSummary, discountValidationErrors
 } from './receipt-model.mjs';
-import {extractReceipt, saveCorrections, validateFile} from './receipt-api.mjs';
+import {saveCorrections, validateFile} from './receipt-api.mjs?v=2';
+import {createReceiptExtraction} from './receipt-extraction.mjs';
 import {createCorrectionSaver} from './receipt-corrections.mjs?v=2';
 import {renderItems, renderWarnings, renderDiscounts, markInvalidCells} from './receipt-view.mjs';
 import {createOcrReview} from './ocr-review.mjs';
@@ -41,6 +42,7 @@ let acknowledgedOutput = null;
 let correctionsPending = false;
 let unloadWarningAttached = false;
 const pageWindow = typeof window === 'undefined' ? null : window;
+const extraction = createReceiptExtraction({pageWindow});
 let copyToastTimer = null;
 let undoTimer = null;
 let removedItem = null;
@@ -141,7 +143,7 @@ form.addEventListener('submit', async event => {
             status.textContent = 'Reintentá el guardado de las correcciones antes de cargar otra factura.';
             return;
         }
-        const payload = await extractReceipt(file);
+        const payload = await extraction.extract(file);
         const nextReceipt = createReceipt(payload);
         // Conservar el ticket y sus ediciones hasta recibir una respuesta válida.
         clearReceiptState();
@@ -172,6 +174,7 @@ form.addEventListener('submit', async event => {
             ? `Listo. Hay ${receipt.warnings.length} advertencia(s) para revisar.`
             : 'Listo. Revisá las filas y copiá la salida.';
     } catch (error) {
+        if (error.name === 'AbortError') return;
         console.error('[facturas] Error al procesar la factura', error);
         status.textContent = `Error: ${error.message}${receipt ? ' Se conserva el ticket anterior.' : ''}`;
     } finally {

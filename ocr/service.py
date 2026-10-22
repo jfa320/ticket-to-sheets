@@ -11,6 +11,7 @@ import tempfile
 import time
 import traceback
 import threading
+import re
 from datetime import datetime
 
 os.environ.setdefault("FLAGS_use_mkldnn", "0")
@@ -50,11 +51,38 @@ app = Flask(__name__)
 OCR_CACHE = {}
 OCR_LOCK = threading.Lock()
 OCR_PROCESSING_LOCK = threading.Lock()
+OCR_REQUEST_CONDITION = threading.Condition()
+OCR_ACTIVE_REQUEST = None
+OCR_CANCELLED_REQUESTS = {}
+OCR_REQUEST_CONTEXT = threading.local()
 DEFAULT_LANGUAGE = os.environ.get("OCR_DEFAULT_LANGUAGE", "es")
 OCR_MAX_REGION_SIDE = 1400
 logging.basicConfig(level=logging.INFO)
 # Paddle's imports may configure the root logger before basicConfig runs.
 app.logger.setLevel(logging.INFO)
+
+
+class OcrCancelled(RuntimeError):
+    pass
+
+
+def check_cancelled():
+    cancelled = getattr(OCR_REQUEST_CONTEXT, "cancelled", None)
+    if cancelled is not None and cancelled.is_set():
+        raise OcrCancelled("Se canceló el procesamiento de la factura.")
+
+
+def valid_extraction_id(value):
+    return bool(value and re.fullmatch(r"[A-Za-z0-9-]{1,64}", value))
+
+
+def prune_cancelled_requests():
+    oldest = time.monotonic() - 600
+    for key, timestamp in list(OCR_CANCELLED_REQUESTS.items()):
+        if timestamp < oldest:
+            del OCR_CANCELLED_REQUESTS[key]
+    while len(OCR_CANCELLED_REQUESTS) >= 256:
+        del OCR_CANCELLED_REQUESTS[next(iter(OCR_CANCELLED_REQUESTS))]
 
 
 def debug_enabled():
@@ -264,12 +292,14 @@ def draw_overlay(image, detections):
 
 
 def recognize_block(ocr, image):
+    check_cancelled()
     temp_path = None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as temp_file:
             image.save(temp_file, format="PNG")
             temp_path = temp_file.name
         result = ocr.ocr(temp_path, cls=False)
+        check_cancelled()
         return extract_detections(result)
     finally:
         if temp_path and os.path.exists(temp_path):
@@ -286,6 +316,7 @@ def ocr_image(ocr, image):
 
 
 def run_best_ocr(image, language, debug_dir=None, preview_sink=None):
+    check_cancelled()
     ocr = get_ocr(language)
     started = time.perf_counter()
     adaptive = adaptive_search_enabled()
@@ -320,6 +351,7 @@ def run_best_ocr(image, language, debug_dir=None, preview_sink=None):
     # Close suspended generators even on early exit, releasing intermediate images.
     try:
         for entry in variants:
+            check_cancelled()
             if selection_deadline is not None and time.perf_counter() >= selection_deadline:
                 stop_reason = "time_budget"
                 break
@@ -340,10 +372,13 @@ def run_best_ocr(image, language, debug_dir=None, preview_sink=None):
                     detections, lines = ocr_image(ocr, variant)
                     if cache_key is not None:
                         readings[cache_key] = (detections, lines)
+            except OcrCancelled:
+                raise
             except Exception as exc:
                 app.logger.warning("OCR variant '%s' failed: %s", name, exc)
                 variant_summaries.append({"variant": name, "error": str(exc)})
                 continue
+            check_cancelled()
             score = score_lines(lines)
             duration_ms = round((time.perf_counter() - variant_started) * 1000)
             app.logger.info("OCR variant '%s': %d ms, %d lines, score %.2f", name, duration_ms, len(lines), score)
@@ -387,6 +422,7 @@ def run_best_ocr(image, language, debug_dir=None, preview_sink=None):
         if close:
             close()
 
+    check_cancelled()
     if best_score < 0:
         raise RuntimeError("PaddleOCR fallo en todas las variantes de imagen. Revisa tamaño/formato de la foto.")
 
@@ -407,7 +443,10 @@ def run_best_ocr(image, language, debug_dir=None, preview_sink=None):
     retry_summary = {"enabled": targeted_retry_enabled()}
     if retry_summary["enabled"] and best_variant is not None:
         try:
-            retry_options = {"should_continue": lambda: time.perf_counter() < deadline} if adaptive else {}
+            def should_continue():
+                check_cancelled()
+                return deadline is None or time.perf_counter() < deadline
+            retry_options = {"should_continue": should_continue}
             # Full-frame variants share an exact rotation/scale with the upload.
             # Reread original pixels rather than enlarging an already downscaled
             # image. Cropped/perspective frames retain their own pixels and boxes.
@@ -434,10 +473,13 @@ def run_best_ocr(image, language, debug_dir=None, preview_sink=None):
                 app.logger.info("Targeted OCR reread: %d regions, %d accepted, %d calls, %d failed calls",
                                 statistics["attemptedRegions"], statistics["acceptedRegions"],
                                 statistics["ocrCalls"], statistics["failedCalls"])
+        except OcrCancelled:
+            raise
         except Exception:
             retry_summary["error"] = "targeted_retry_failed"
             app.logger.warning("Targeted OCR reread failed; keeping the selected variant result")
 
+    check_cancelled()
     preview = " | ".join(line["text"] for line in best_lines[:12])
     app.logger.info("Selected OCR variant '%s' with score %.2f and %d lines: %s", best_name, best_score, len(best_lines), preview)
     search_summary = {"adaptive": adaptive, "stopReason": stop_reason, "variantCount": len(variant_summaries),
@@ -471,24 +513,43 @@ def run_best_ocr(image, language, debug_dir=None, preview_sink=None):
 
 @app.post("/ocr")
 def ocr_endpoint():
+    global OCR_ACTIVE_REQUEST
     if not request.data:
         return jsonify({"error": "No se recibio imagen"}), 400
+
+    extraction_id = request.headers.get("X-Extraction-Id")
+    if extraction_id is not None and not valid_extraction_id(extraction_id):
+        return jsonify({"error": "El identificador de extracción no es válido."}), 400
 
     if DEFAULT_LANGUAGE not in OCR_CACHE:
         return jsonify({"error": "El OCR está preparando los modelos. Esperá a que termine y reintentá."}), 503
 
-    if not OCR_PROCESSING_LOCK.acquire(blocking=False):
-        return jsonify({"error": "Ya hay una factura en procesamiento. Esperá a que termine y reintentá."}), 429
+    with OCR_REQUEST_CONDITION:
+        prune_cancelled_requests()
+        while True:
+            if extraction_id in OCR_CANCELLED_REQUESTS:
+                return jsonify({"error": "Se canceló el procesamiento de la factura."}), 409
+            if OCR_PROCESSING_LOCK.acquire(blocking=False):
+                cancelled = threading.Event()
+                OCR_ACTIVE_REQUEST = (extraction_id, cancelled)
+                break
+            if OCR_ACTIVE_REQUEST is None or not OCR_ACTIVE_REQUEST[1].is_set():
+                return jsonify({"error": "Ya hay una factura en procesamiento. Esperá a que termine y reintentá."}), 429
+            # Nunca ejecutar dos lecturas nativas sobre la misma instancia PaddleOCR.
+            OCR_REQUEST_CONDITION.wait()
+    OCR_REQUEST_CONTEXT.cancelled = cancelled
 
     language = request.headers.get("X-OCR-Language", "es")
 
     try:
+        check_cancelled()
         with Image.open(BytesIO(request.data)) as uploaded:
             image = ImageOps.exif_transpose(uploaded).convert("RGB")
         debug_dir = create_debug_dir()
         save_debug_image(debug_dir, "original.png", image)
         preview = {}
         variant_name, lines, detections, score = run_best_ocr(image, language, debug_dir, preview_sink=preview)
+        check_cancelled()
         text = "\n".join(line["text"] for line in lines)
         response = {
             "text": text,
@@ -506,19 +567,42 @@ def ocr_endpoint():
             status=200,
             mimetype="application/json",
         )
+    except OcrCancelled as exc:
+        app.logger.info("OCR request cancelled: %s", extraction_id)
+        return jsonify({"error": str(exc)}), 409
     except Exception as exc:
         app.logger.error("OCR request failed: %s\n%s", exc, traceback.format_exc())
         return jsonify({"error": str(exc)}), 500
     finally:
-        OCR_PROCESSING_LOCK.release()
+        del OCR_REQUEST_CONTEXT.cancelled
+        with OCR_REQUEST_CONDITION:
+            OCR_ACTIVE_REQUEST = None
+            OCR_PROCESSING_LOCK.release()
+            OCR_REQUEST_CONDITION.notify_all()
+
+
+@app.post("/ocr/cancel")
+def cancel_ocr_endpoint():
+    extraction_id = request.args.get("extractionId")
+    if not valid_extraction_id(extraction_id):
+        return jsonify({"error": "El identificador de extracción no es válido."}), 400
+    with OCR_REQUEST_CONDITION:
+        prune_cancelled_requests()
+        OCR_CANCELLED_REQUESTS[extraction_id] = time.monotonic()
+        if OCR_ACTIVE_REQUEST is not None and OCR_ACTIVE_REQUEST[0] == extraction_id:
+            OCR_ACTIVE_REQUEST[1].set()
+        OCR_REQUEST_CONDITION.notify_all()
+    return jsonify({"cancelled": True}), 200
 
 
 @app.get("/health")
 def health_endpoint():
-    return jsonify({
-        "status": "ok", "ocrReady": DEFAULT_LANGUAGE in OCR_CACHE,
-        "ocrBusy": OCR_PROCESSING_LOCK.locked(),
-    }), 200
+    with OCR_REQUEST_CONDITION:
+        return jsonify({
+            "status": "ok", "ocrReady": DEFAULT_LANGUAGE in OCR_CACHE,
+            "ocrBusy": OCR_PROCESSING_LOCK.locked(),
+            "ocrCancelling": OCR_ACTIVE_REQUEST is not None and OCR_ACTIVE_REQUEST[1].is_set(),
+        }), 200
 
 
 if __name__ == "__main__":

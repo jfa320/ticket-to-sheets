@@ -318,6 +318,14 @@ Configuracion relevante:
 - `app.ocr.max-attempts=3`; si OCR no está disponible, el backend informa el error en pocos segundos.
 - `app.sheets.credentials-path=data/google-service-account.json`, `app.sheets.config-path=data/sheets-config.json`, `app.sheets.history-path=data/sheets-history.json` y `app.sheets.timeout-ms=15000`. Variables equivalentes `APP_SHEETS_*`; en Compose se usa `/app/data/` por el volumen existente. Claves, configuración personal, catálogo histórico y `secrets/` están ignorados por Git y excluidos del contexto Docker.
 
+## Cancelación al recargar la página
+
+La extracción admite el encabezado opcional `X-Extraction-Id`, generado por el navegador para cada archivo. `POST /api/receipts/cancel?extractionId=...` cancela únicamente ese trabajo y comunica la cancelación al OCR mediante `POST /ocr/cancel?extractionId=...`. Ambos servicios recuerdan por hasta diez minutos (máximo 256 identificadores) las cancelaciones que llegan antes de la subida. Una extracción cancelada responde HTTP 409 y no se envía al parser. Las extracciones activas sin cancelar siguen rechazando solapamientos con HTTP 429.
+
+`receipt-extraction.mjs` guarda el identificador pendiente en `sessionStorage`, envía la cancelación con `sendBeacon` en `pagehide` (o `fetch` con `keepalive` si no pudo encolarse) y aborta la petición del navegador. Al cargar la página, confirma otra vez la cancelación pendiente antes de subir un archivo nuevo; si falla, conserva el identificador para reintentar. `beforeunload` conserva los avisos de trabajo pendiente y no cancela si el usuario decide quedarse. También recupera cancelaciones al restaurar la página desde la caché de navegación.
+
+La cancelación en Python es cooperativa: se comprueba entre llamadas nativas, variantes y relecturas. Una llamada PaddleOCR ya iniciada termina antes de liberar la instancia; se descarta su resultado y se omiten las pasadas y páginas restantes. El healthcheck incluye `ocrCancelling`; una factura nueva espera esa liberación sin recibir el error de OCR ocupado. Las cancelaciones tardías no afectan otros identificadores.
+
 ## BPM/Flowable
 
 No existe BPM/Flowable. No hay dependencias, archivos BPMN, procesos ni integracion Java asociada.

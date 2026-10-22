@@ -5,6 +5,7 @@ import {runInNewContext} from 'node:vm';
 import * as model from '../../main/resources/static/receipt-model.mjs';
 import {validateFile} from '../../main/resources/static/receipt-api.mjs';
 import {createCorrectionSaver} from '../../main/resources/static/receipt-corrections.mjs';
+import {createReceiptExtraction} from '../../main/resources/static/receipt-extraction.mjs';
 
 const source = readFileSync(new URL('../../main/resources/static/app.js', import.meta.url), 'utf8');
 const file = name => ({name, type: 'image/png', size: 100});
@@ -45,7 +46,9 @@ function createApp() {
     let extract = async () => payload('Producto anterior');
     const dependencies = {
         ...model, validateFile,
-        extractReceipt: uploaded => { extractionCalls++; return extract(uploaded); },
+        createReceiptExtraction: options => createReceiptExtraction({...options,
+            extract: uploaded => { extractionCalls++; return extract(uploaded); },
+            cancel: async () => ({cancelled: true}), createId: () => `extraction-${extractionCalls}`}),
         saveCorrections: async batch => { corrections.push(batch); return {saved: batch.corrections.length}; },
         createCorrectionSaver(receipt, options) {
             const saver = createCorrectionSaver(receipt, {...options, setTimer: () => 1, clearTimer() {}});
