@@ -4,8 +4,35 @@ App local para subir una foto o PDF de un ticket, correr OCR gratis con PaddleOC
 
 ## Que hace
 
+- permite abrir el recorte de una fila con “Ver en imagen”, filtrar filas ambiguas pendientes y marcarlas como revisadas. Editar una fila reabre su revisión; el estado OCR y la memoria permanecen visibles.
+- ofrece “Administrar correcciones aprendidas”: búsqueda por comercio/texto, edición y eliminación individual. Los cambios afectan futuras extracciones. Si otra edición modificó la misma entrada, pide recargarla antes de guardar.
+
+### Validación completa local
+
+```powershell
+./scripts/check.ps1
+# Para elegir el entorno Python:
+./scripts/check.ps1 -Python ./.venv/Scripts/python.exe
+# Además, validar Compose y construir las imágenes:
+./scripts/check.ps1 -Docker
+```
+
+Requiere Java 17/Maven, Node y Python **3.11** con `ocr/requirements.txt`. No instala dependencias. Falla ante comandos faltantes, errores o pruebas Python omitidas. Tanto `check.ps1` como `local.ps1` usan `-Python`, luego `APP_PYTHON`, luego `.venv` y finalmente Python del PATH. Una selección explícita inválida o una versión distinta de 3.11 produce un error claro. Docker es opcional y `-Docker` falla si no está instalado. También se comprueban los módulos locales incluidos por el Dockerfile; esta comprobación no ejecuta Docker.
+
+Para preparar el entorno con una instalación local de Python 3.11:
+
+```powershell
+py -3.11 -m venv .venv
+./.venv/Scripts/python.exe -m pip install -r ocr/requirements.txt
+./scripts/check.ps1
+```
+
+Para medir precisión y tiempos, ver [la guía de evaluación](docs/OCR_EVALUATION.md). El [entorno de pruebas de navegador](docs/BROWSER_TESTING.md) permite verificar el flujo con datos ficticios y un destino Sheets simulado.
+
+### Extracción y revisión
+
 - extrae texto de imagen o PDF con PaddleOCR
-- prueba primero la orientación del texto y concentra las mejoras en la más legible; reutiliza lecturas de imágenes con píxeles idénticos
+- prueba primero la orientación con imágenes de hasta un megapíxel y 700 píxeles de lado corto, y concentra las mejoras en la más legible. Prefiere las lecturas completas a esas sondas; reutiliza lecturas de imágenes con píxeles idénticos
 - prioriza variantes que asocian productos e importes, reduciendo el puntaje de precios sueltos en tickets inclinados
 - conserva el color y el texto tenue como candidato OCR; compara el original con versiones recortadas y mejoradas
 - compara también variantes con inclinación/perspectiva corregidas y con contraste local o sombras compensadas, conservando el original como alternativa
@@ -15,6 +42,8 @@ App local para subir una foto o PDF de un ticket, correr OCR gratis con PaddleOC
 - procesa los tickets largos en bloques solapados para conservar el detalle, reunificando coordenadas y detecciones repetidas del mismo renglón
 - detecta fecha y lugar de compra; admite fechas sin etiqueta, con `/`, `-` o `.`, además de las etiquetadas
 - reconoce el encabezado de PedidosYa `Entregado mié 30 de sept · 22:04 hs`, incluso separado por el OCR, con meses completos o abreviados; si falta el año usa el año actual (revisarlo en pedidos antiguos)
+- avisa cuando el año de la fecha fue inferido; mantiene la regla del año actual y permite corregirlo antes de exportar
+- corrige confusiones `O`/`0` y sufijos OCR en presentaciones explícitas, como `1ke` → `1kg` o `8ogf` → `80gr`, conservando importes, cantidades y firma original
 - prioriza variantes OCR que conservan la fecha de entrega de Market y excluye compensaciones, cupones y botones de las filas de productos
 - arma filas con estas columnas: `Descripción|Marca|Lugar de compra|Categoria|Cantidad|Precio unitario|Fecha`
 - usa las cajas OCR para interpretar columnas de descripcion, cantidad, precio unitario e importe cuando el ticket viene en formato tabular
@@ -33,6 +62,7 @@ App local para subir una foto o PDF de un ticket, correr OCR gratis con PaddleOC
 - cancela la extracción en curso al recargar o salir de la página; descarta el resultado anterior y permite procesar otra factura. Si PaddleOCR está dentro de una llamada nativa, espera su finalización y no inicia más pasadas ni páginas del trabajo cancelado
 - permite guardar un destino de Google Sheets y cargar las filas seleccionadas con un botón, mediante una cuenta de servicio
 - marca filas ambiguas y muestra advertencias completas cuando una línea no pudo confirmarse
+- conserva la baja confianza de productos, cantidades y precios de PedidosYa; una fila puede mostrar **Ambiguo** y **Memorizado** a la vez, porque aprender el nombre no confirma el precio del ticket nuevo
 - aprende de tus correcciones (marca, categoría y descripción) y las aplica en el próximo ticket del mismo comercio
 - usa el historial de Google Sheets o Excel para completar productos conocidos, incluso con errores OCR y abreviaturas; las coincidencias dudosas se muestran para revisión
 - muestra tambien el texto OCR crudo para depurar
@@ -149,7 +179,7 @@ La [guía de configuración](docs/GOOGLE_SHEETS.md) explica cómo habilitar Goog
 
 La plantilla de compras usa encabezados en la fila 2: las siete columnas exportadas en A:G, `Precio total` en H y `Comentarios` en I. La carga calcula H como cantidad × precio unitario, conserva I y los resúmenes laterales y almacena números y fechas como valores de hoja de cálculo. La fecha de las filas seleccionadas propone el mes de destino; podés elegir otra pestaña para cargar tickets atrasados sin cambiar sus fechas.
 
-El destino se guarda en `data/sheets-config.json`. El archivo de credenciales predeterminado es `data/google-service-account.json`; ambos están ignorados por Git y excluidos del contexto de build de Docker. El token de Google permanece en memoria del backend. Cada carga lleva un identificador para reconocer reintentos y evitar duplicados de la misma operación.
+El destino se guarda en `data/sheets-config.json`. El archivo de credenciales predeterminado es `data/google-service-account.json`; ambos están ignorados por Git y excluidos del contexto de build de Docker. El token de Google permanece en memoria del backend. Cada carga lleva un identificador para reconocer reintentos y evitar duplicados de la misma operación. Si se pierde la respuesta, la sesión conserva el identificador, destino y huella del intento, sin guardar productos, imágenes ni texto OCR. Tras recargar, al volver a enviar los mismos datos se comprueba primero si ya quedaron guardados. Si los datos cambiaron, la pantalla pide revisar la carga anterior antes de continuar. Hace falta permitir almacenamiento de sesión en el navegador.
 
 ## Aprendizaje de correcciones
 

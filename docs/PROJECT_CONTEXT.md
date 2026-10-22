@@ -1,5 +1,21 @@
 # PROJECT_CONTEXT
 
+## Actualización de confiabilidad — 22/10/2026
+
+- `ReceiptItem.fuentesOcr` agrega referencias `{pageNumber,detectionIndices}` a las detecciones originales. `ReceiptEvidenceMapper` usa firmas exactas y conserva el orden de productos repetidos. No inventa coordenadas para texto sin cajas. La UI permite ver el recorte, filtrar ambiguas pendientes y marcar revisión local; ese indicador no se exporta ni entrena la memoria.
+- `OcrDetection.reviewRequired` conserva conflictos de importes aunque su confianza individual sea alta. También marca importes entre 0,80 y 0,97 que no pudieron confirmarse con dos relecturas más confiables. La fusión solo corrige un importe ante dos imágenes diferentes alineadas, lecturas iguales y confianza suficiente; ante contradicción conserva el valor y exige revisión. La relectura endereza polígonos de precios inclinados antes de comprobar sus vecinos, manteniendo las coordenadas originales de salida.
+- `GET /api/corrections?q=&offset=0&limit=25` lista memoria local. `PUT /api/corrections` recibe `store,firma,version,descripcion,marca,categoria`; `DELETE /api/corrections` recibe `store,firma,version`. La versión SHA-256 detecta modificaciones simultáneas con HTTP 409. Los cambios se guardan de forma atómica antes de actualizar memoria; la edición explícita admite volver a Genérico o vaciar categoría.
+- `X-OCR-Search-Budget-Seconds` permite comparar presupuestos de búsqueda de 5 a 180 segundos por solicitud. Spring lo valida y reenvía al OCR; el valor solo vive durante esa extracción. El presupuesto es cooperativo: una llamada nativa iniciada puede superar el límite.
+- `scripts/check.ps1` reúne Java, JavaScript, Python y pruebas del lanzador. Falla ante dependencias faltantes o pruebas Python omitidas. `-Docker` agrega configuración y construcción de imágenes, sin arrancar servicios.
+
+- `PedidosYaReceiptParser.parse(lines, uncertainByLine)` conserva la incertidumbre de la descripción, el precio y las cantidades anteriores o posteriores que consume. Produce `AMBIGUOUS` y una advertencia cuando alguno de esos datos tiene baja confianza.
+- `ReceiptItem` agrega el booleano `memorizado`, independiente de `estado`. Aplicar memoria conserva `AMBIGUOUS` si cantidad/precio necesitan revisión. La UI muestra ambas etiquetas y el historial respeta la prioridad de la memoria también en ese caso. Las exportaciones conservan sus siete columnas.
+- `ReceiptDateParser.extractWithSource` distingue una fecha completa de otra cuyo año se completó con el año actual. El parser agrega una advertencia en el segundo caso; no cambia la prioridad de fechas ni la normalización.
+- `sheets-transfer-journal.mjs` conserva solo UUID, destino y huella del intento sin confirmar en `sessionStorage`. `POST /api/sheets/status`, con `{requestId,destination}`, consulta el marcador remoto y devuelve `{committed,result}` sin escribir ni recibir filas. La consulta queda serializada con las cargas mediante `SheetsService`. Al reenviar los mismos datos, se recupera una confirmación existente o se reutiliza el UUID; si no puede confirmarse, se bloquean nuevos datos/destinos. La sesión se borra al cerrar la pestaña y no constituye historial de tickets.
+- `ocr/receipt_metrics.py` compara productos asociados por descripción normalizada, conserva repeticiones y mide cantidades, precios y campos opcionales. `ocr/evaluate.py` acepta referencias por producto sin transcripción textual, agrega aciertos por campo, cobertura de productos completos y latencias p50/p95. Los informes no guardan nombres, precios ni transcripciones. Ver [guía de evaluación](OCR_EVALUATION.md).
+
+Los planes iniciales `MVP_FINDE_AJUSTADO_AL_PROYECTO.md` y `ocr-layout-problem.md` se conservan como antecedentes históricos. Este documento y README describen el comportamiento vigente. El catálogo compartido continúa diferido por decisión explícita.
+
 ## Objetivo general del sistema
 
 Aplicacion local para extraer datos utiles de tickets/facturas de supermercado desde imagenes o PDFs. El usuario sube un archivo desde una UI web, el backend lo convierte/preprocesa si hace falta, llama a un servicio OCR local en Docker basado en PaddleOCR, parsea texto y geometria OCR con reglas heuristicas y devuelve filas para copiar o cargar en un Google Sheet configurable.
@@ -43,7 +59,7 @@ No hay `package.json`; no hay build frontend npm.
 
 ## Estado actual de ambiguedad y UI
 
-- `ReceiptItem.estado` marca cada fila como `CORRECT`, `AMBIGUOUS`, `LEARNED` (corrección manual memorizada) o `HISTORY` (coincidencia con el catálogo de Sheets).
+- `ReceiptItem.estado` marca cada fila como `CORRECT`, `AMBIGUOUS`, `LEARNED` (corrección memorizada sin incertidumbre) o `HISTORY` (coincidencia con el catálogo de Sheets). `memorizado=true` identifica el aprendizaje de forma independiente y permite conservar `AMBIGUOUS` junto a la etiqueta Memorizado.
 - En filas reconstruidas desde detecciones, el parser también marca como ambiguas las que tienen alguna confianza OCR menor a `0.65` o una caja individual con una relación ancho/alto de `28` o más. La confianza ausente se trata como desconocida.
 - `ExtractResponse.warnings` informa lineas dudosas descartadas, por ejemplo precios sin descripcion.
 - La UI estatica renderiza una tabla editable, permite corregir o eliminar filas y resalta resultados ambiguos.
@@ -55,7 +71,7 @@ No hay `package.json`; no hay build frontend npm.
 - PedidosYa tolera errores OCR frecuentes en el encabezado (`PodidosYa`) y descarta bloques de interfaz como `Tu pedido`, `Tu pago`, descuentos y detalles de entrega.
 - Se agrego una regresion OCR reproducible en `test-data/receipts/pedidosya/pedidosya-market-san-miguel-ii-ocr.txt`; la imagen original del caso no estaba disponible como archivo en el workspace.
 - `ReceiptItem.firma` identifica la linea OCR normalizada que origino cada fila y sirve de llave para el aprendizaje.
-- El sistema aprende correcciones de marca, categoria y descripcion por comercio, las persiste en `data/corrections.json` y las reutiliza en el proximo ticket (override o recuperacion de filas perdidas), marcando los items aplicados como `LEARNED`.
+- El sistema aprende correcciones de marca, categoría y descripción por comercio, las persiste en `data/corrections.json` y las reutiliza en el próximo ticket. Los items aplicados llevan `memorizado=true`; conservan `AMBIGUOUS` si la cantidad o el precio requieren revisión y, de otro modo, usan `LEARNED`.
 - `CorrectionMemoryStore` y `BrandCatalogStore` escriben primero a un temporal, reemplazan el JSON y guardan una copia `.bak` del estado anterior. Si el archivo principal no se puede leer, restauran esa copia.
 - `ReceiptProductRules` fija el comodín manual del supermercado `ALMACEN` / `ALMACÉN` como descripción `Almacén` y marca `Genérico`. La regla tiene prioridad sobre memoria e historial, conserva cada aparición, cantidad y precio actuales, y mantiene las advertencias por lectura dudosa de importes. Solo aplica a la etiqueta completa, no a nombres de productos que contengan esa palabra.
 
@@ -173,7 +189,7 @@ Excluido: `.git`, `target`, logs, caches, outputs de build.
 
 ## Principales entidades de dominio y relaciones
 
-- `ReceiptItem`: fila de producto extraida. Campos: `descripcion`, `marca`, `lugarDeCompra`, `categoria`, `cantidad`, `precioUnitario`, `fecha`, `estado`, `firma`.
+- `ReceiptItem`: fila de producto extraída. Campos: `descripcion`, `marca`, `lugarDeCompra`, `categoria`, `cantidad`, `precioUnitario`, `fecha`, `estado`, `firma`, `memorizado`. Las siete columnas exportadas no incluyen los tres campos de revisión.
 - `ExtractResponse`: respuesta completa del endpoint. Contiene metadata (`storeName`, `date`, `itemCount`, `total` calculado desde los items), exportaciones (`csv`, `tsv`, `tsvWithoutHeader`), `rawText`, `items`, `warnings`, `variant`, `score` OCR y `ocrReview`.
 - `OcrResult`: resultado OCR estructurado recibido desde Python, con `text`, `lines`, `detections`, `variant`, `score`, `preview` opcional y, para PDFs mergeados en Java, `pages`.
 - `OcrPreview`: `imageDataUrl` JPEG local, `width` y `height` del marco de coordenadas OCR. Las dimensiones del JPEG pueden ser menores: el frontend escala el recorte según su resolución real. El JPEG se limita a 2 megapíxeles, 8000 px por lado y 900 KB antes de base64.
@@ -218,6 +234,7 @@ Endpoints de Google Sheets (`SheetsController`):
 - `PUT /api/sheets/config`: recibe `{ spreadsheetUrlOrId, year, headerRow, monthSheets }` y guarda URL/ID validado y asociaciones de meses a pestañas exactas en `data/sheets-config.json`.
 - `POST /api/sheets/check`: lee metadatos y A:I de las pestañas; devuelve las compatibles, las incompatibles y sugerencias por nombres mensuales inequívocos.
 - `POST /api/sheets/append`: recibe `{ requestId, items, destination: { spreadsheetId, sheetName, headerRow }, configVersion }`. Valida todas las filas y verifica que el destino y la versión coincidan con la configuración antes de llamar a Google. Responde `{ spreadsheetUrl, sheetName, updatedRange, appendedRows, duplicate }`.
+- `POST /api/sheets/status`: recibe `{requestId,destination}`, comprueba el destino configurado y consulta el marcador del UUID. Responde `{committed,result}` sin escribir ni recibir productos; `result` es la confirmación anterior o `null` si no hay marcador.
 
 Catálogo histórico (`SheetsHistoryController`):
 
@@ -452,7 +469,7 @@ npm:
 - Fechas normalizadas a patron `d/M/yyyy`; fechas sin anio usan el anio actual del sistema.
 - `ReceiptDateParser` reconoce meses españoles completos y abreviados (`sep`, `sept`, `septiembre`, `setiembre`, etc.) en fechas etiquetadas o aisladas. Acepta `Entregado`/`Entregada` de PedidosYa y reúne hasta tres líneas OCR contiguas del encabezado. Prioriza `Fecha` explícita, valida el calendario y excluye vencimiento, fabricación e inicio de actividad. El año ausente mantiene la regla del año actual; no se deduce a partir del día de la semana.
 - PedidosYa excluye compensaciones, cupones y botones antes de buscar productos y precios. El scoring OCR concede un bonus acotado por una fecha de entrega legible y no cuenta los importes de esos bloques como evidencia de productos.
-- Marcas: primero intenta catalogo conocido; si no encuentra, infiere la marca desde las primeras palabras de la descripcion y puede persistirla en `data/brands.json`.
+- Marcas: primero intenta el catálogo conocido; si no encuentra, puede inferir la marca desde las primeras palabras. Solo las correcciones recibidas por `CorrectionController` llaman a `BrandCatalog.remember` y persisten marcas; extraer un ticket no escribe el catálogo.
 - Comercio: deteccion por primeras lineas del ticket y posterior normalizacion via `StoreNameMapper`.
 - PedidosYa se detecta si alguna linea contiene `pedidosya`, `pedidos ya`, `podidosya` o una combinacion de `market` y `pedido`; usa parsing especial para cantidades `x`, kg y precios con descuentos y evita advertencias sobre bloques de interfaz.
 - En capturas de PedidosYa con cambios en el pago, el parser delimita `Tu pedido` hasta el pie del listado. Detecta si las cantidades separadas preceden a los nombres o siguen a los precios, y consume cada fila de precio junto con su descripción para evitar duplicados por texto de envases. Descarta el cobro extra, botones y el prefijo OCR espurio `0.00` antes del nombre; toma el primer precio (vigente), divide el importe de línea por la cantidad y conserva warnings de productos sin precio. Los pesos como `1kg1.08 kg` no se interpretan como importes. El catálogo incluye `Patitas` y `Noly`; la búsqueda del comercio revisa el encabezado completo aunque antes aparezca `Ayuda`. La fecha admite `09de oct`/`09deoct` y usa el año actual cuando falta. La memoria de correcciones se aplica sólo a candidatos del listado para que no reaparezcan filas descartadas. Estas reglas se verifican con texto OCR reproducible y geometría sintética en `PedidosYaReceiptParserTest`.
@@ -470,7 +487,7 @@ npm:
 - `application.properties` default apunta a `127.0.0.1:5000`; en Docker depende de variables de entorno convertidas por Spring relaxed binding.
 - `tessdata` sugiere una implementacion previa con Tesseract, pero no hay uso actual en codigo.
 - No hay persistencia de tickets, autenticación de usuarios ni rate limiting. Hay un catálogo histórico opcional de productos; Google Sheets requiere la autorización de la cuenta de servicio.
-- El contrato del endpoint `/ocr` tiene pruebas con PaddleOCR simulado; falta evaluar la precisión y latencia con modelos y tickets reales.
+- El contrato del endpoint `/ocr` tiene pruebas con PaddleOCR simulado. La evaluación real se ejecuta por separado sobre un corpus local y referencias verificadas; sus resultados y limitaciones no se deducen del éxito de los tests unitarios. Ver `OCR_EVALUATION.md`.
 
 ## Decisión pendiente: catálogo de correcciones compartidas
 
@@ -517,3 +534,13 @@ El 13/10/2026 el usuario pidió conservar esta decisión para implementarla más
 | Config app | `application.properties` | Multipart, límites de archivos/PDF, endpoint OCR, health, idioma, timeouts y reintentos. |
 | Tests parser, OCR y memoria | `ReceiptParserServiceTest.java`, `ReceiptLayoutReaderTest.java`, `ReceiptEvaluationTest.java`, `ReceiptParsingComponentsTest.java`, `OcrServiceTest.java`, `OcrApiClientTest.java`, `OcrResultMapperTest.java`, `PdfPageRendererTest.java`, `BrandCatalogComponentsTest.java`, `CorrectionMemoryComponentsTest.java`, `src/test/resources/receipt-evaluation` | Regresiones del parser, banco anonimo de evaluacion y pruebas directas de fachadas, matching y persistencia. |
 | Documentacion usuario | `README.md` | Uso con Docker, flujo recomendado, limites actuales y mejoras futuras. |
+
+## Comprobaciones y normalización de presentaciones
+
+`ReceiptPresentationNormalizer` repara confusiones OCR únicamente en tamaños explícitos con al menos un dígito: `O`/`0` y sufijos `gf`/`ge`, `ke`, `um`. Conserva las unidades válidas sin cambios de espaciado, los importes, las cantidades y la firma OCR utilizada por la memoria. No intenta adivinar nombres completos de productos.
+
+La búsqueda adaptativa prueba orientaciones con sondas de hasta 700 píxeles de lado corto y un megapíxel. Una lectura completa reemplaza la sonda aun cuando esta tenga un score mayor. El presupuesto predeterminado sigue siendo 90 segundos por página; las comparaciones de perfiles deben mantener referencias idénticas y distinguir cambios del entorno.
+
+`scripts/python-runtime.ps1` comparte la selección de Python entre arranque y validación: `-Python`, `APP_PYTHON`, `.venv`, PATH; exige Python 3.11. `scripts/check.ps1` ejecuta Java, JavaScript, Python y pruebas del lanzador, rechaza omisiones y comprueba los imports locales del Dockerfile. `-Docker` solicita la construcción real adicional.
+
+`ocr/synthetic_corpus.py` genera 20 tickets ficticios en dos particiones con referencias anteriores al OCR. `scripts/browser_fixture.py` permite probar la UI y un backend real aislado usando OCR y Sheets sintéticos; no escribe en Google ni en la memoria personal. Los pasos y límites están en `docs/BROWSER_TESTING.md`; los resultados locales agregados están en `docs/MEJORAS_20261022.md`.

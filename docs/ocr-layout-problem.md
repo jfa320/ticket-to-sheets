@@ -2,6 +2,8 @@
 
 Fecha: 2026-08-08
 
+> **Diagnóstico histórico.** Las secciones iniciales describen el código de agosto de 2026 y las fases posteriores documentan su evolución. No son una lista vigente de tareas pendientes. Actualmente el parser recibe cajas y confianza, PedidosYa conserva la incertidumbre de precios/cantidades y la UI permite agregar, editar y eliminar filas. El estado actual está en [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md); la evaluación reproducible está en [OCR_EVALUATION.md](OCR_EVALUATION.md).
+
 ## Objetivo
 
 Identificar en que etapa puede aparecer una fusion de layout como:
@@ -37,7 +39,7 @@ El resultado Java ahora conserva las filas dudosas con `items[].estado`:
 
 Las lineas de precio sin descripcion y otros candidatos descartados aparecen en `warnings`. La UI muestra las filas ambiguas resaltadas y permite editar campos o eliminar filas. Las exportaciones se regeneran en el frontend despues de cada correccion para que copiar TSV/CSV use el estado actualizado.
 
-La ambiguedad basada en confidence o bounding boxes queda pendiente: esos datos existen en `OcrResult`, pero todavia no se pasan al parser de recibos.
+En el diagnóstico inicial todavía no se usaban confidence o bounding boxes en el parser. Esa limitación ya fue resuelta por `ReceiptLayoutReader` y los parsers de comercio; no es un pendiente actual.
 
 ## Regresion PedidosYa
 

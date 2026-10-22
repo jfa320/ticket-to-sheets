@@ -1,11 +1,13 @@
 ﻿param(
     [ValidateSet('Start', 'Stop')][string]$Action = 'Start',
     [switch]$SkipBuild,
-    [ValidateRange(1, 3600)][int]$OcrStartupTimeoutSec = 300
+    [ValidateRange(1, 3600)][int]$OcrStartupTimeoutSec = 300,
+    [string]$Python = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+. (Join-Path $PSScriptRoot 'python-runtime.ps1')
 $logRoot = Join-Path $repoRoot 'logs'
 $buildJar = Join-Path $repoRoot 'target/facturas-ocr-0.0.1-SNAPSHOT.jar'
 $runtimeRoot = Join-Path $logRoot 'runtime'
@@ -95,7 +97,8 @@ try {
     # Un proceso recién lanzado puede estar importando Paddle antes de abrir el puerto.
     # Reutilizar su PID evita iniciar otra copia durante esa ventana.
     if (-not (Get-OcrHealth) -and @(Get-LocalServiceProcess 5000 'ocr').Count -eq 0) {
-        $python = (Get-Command python.exe -ErrorAction Stop).Source
+        $python = Resolve-ProjectPython $repoRoot $Python
+        Write-Host "Python OCR: $python"
         $ocrScript = Join-Path $repoRoot 'ocr/service.py'
         $ocrProcess = Start-Process -FilePath $python -ArgumentList ('"' + $ocrScript + '"') `
             -WorkingDirectory (Join-Path $repoRoot 'ocr') -WindowStyle Hidden `

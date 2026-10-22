@@ -1,5 +1,7 @@
 # MVP OCR de tickets — Plan del fin de semana ajustado al proyecto actual
 
+> **Plan histórico, no backlog vigente.** El contenido original registra decisiones del MVP. Para el estado actual consultá [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md) y [README](../README.md). Al 22/10/2026 ya existen alta manual de filas, revisión visual con cajas/confianza, detección PDF por firma de contenido, volumen persistente para `data/`, integración con Sheets y cancelación. Las antiguas instrucciones que excluyen esas funciones describen aquel alcance, no el actual. La validación manual de uso y de tiempo ahorrado por cada persona sigue requiriendo una prueba con usuarios; no se considera completada por tests automáticos.
+
 ## 0. Objetivo
 
 Este documento define qué implementar este fin de semana **sobre el proyecto que ya existe**, sin reescribirlo ni agregar infraestructura innecesaria.
@@ -1270,8 +1272,8 @@ Al final probar:
 - imagen directa;
 - PDF equivalente.
 
-Mejora futura:
-- detectar PDF por MIME/magic bytes y no solo extensión.
+Implementado posteriormente:
+- detectar PDF por firma de contenido, con límites y regresiones en `OcrServiceTest` y `PdfPageRendererTest`.
 
 No es prioridad.
 
@@ -1287,8 +1289,8 @@ data/brands.json
 
 No convertirlo aún en catálogo global de productos.
 
-Recordar deuda técnica:
-- en Docker puede perder cambios si no se monta volumen.
+Resuelto posteriormente:
+- Compose monta `./data:/app/data`, por lo que las marcas y correcciones persisten entre rebuilds.
 
 No mezclar eso con el bug de layout.
 
@@ -1313,7 +1315,7 @@ No refactorizarlo como parte del OCR.
 
 - [x] La app levanta como antes.
 - [x] Imagen funciona.
-- [ ] PDF funciona.
+- [x] PDF tiene render, extracción de texto nativo y regresiones automatizadas; la validación manual de PDF reales se registra aparte.
 - [x] El bug se reproduce.
 - [x] Se sabe exactamente dónde nace la fusión.
 - [x] Existe debug visual.
@@ -1321,7 +1323,7 @@ No refactorizarlo como parte del OCR.
 - [x] Existe variante de eliminación de líneas.
 - [x] Los resultados dudosos se marcan.
 - [x] La UI permite corregir.
-- [x] Se pueden eliminar filas; agregar filas queda fuera del MVP.
+- [x] Se pueden eliminar y agregar filas manualmente desde la UI actual.
 - [x] El TSV final refleja correcciones.
 - [x] Raw OCR sigue visible.
 
@@ -1330,7 +1332,7 @@ No refactorizarlo como parte del OCR.
 - [x] `mvn test` pasa.
 - [x] Hay regresión para el bug.
 - [x] PedidosYa sigue funcionando.
-- [ ] Se probaron al menos cinco tickets.
+- [x] Se documentó una validación local previa de siete fotos y 69 productos en `test-data/receipt-validation/RESULTADOS.md` (ignorado por Git). Las nuevas mediciones y referencias se mantienen también locales.
 - [x] Existe comparación antes/después.
 - [x] README actualizado.
 - [x] No se agregó LLM.

@@ -45,7 +45,7 @@ Directorios importantes:
 4. El servicio Python responde con texto, líneas, detecciones, variante y score.
 5. `ReceiptParserService` extrae comercio, fecha, productos, marca, cantidad y precio.
 6. `DelimitedExporter` genera formato con `|`, TSV con encabezado y TSV sin encabezado.
-7. El frontend permite editar/eliminar filas y recalcula la salida antes de copiarla.
+7. El frontend permite agregar/editar/eliminar filas y recalcula la salida antes de copiarla o cargarla directamente en Sheets.
 8. Las correcciones de descripción, marca y categoría se envían a `POST /api/corrections` y se guardan por comercio y firma de línea.
 
 El endpoint del OCR es `POST /ocr` y su healthcheck es `GET /health`. En Docker, el backend usa `http://paddleocr:5000`; en ejecución local de Spring Boot, los valores por defecto apuntan a `127.0.0.1:5000`.
@@ -61,7 +61,7 @@ docker compose logs -f app paddleocr
 docker compose down
 
 # Desarrollo mixto: OCR en Docker y backend local
-docker compose up --build -d paddleocr
+docker compose -f compose.yaml -f compose.local-ocr.yaml up --build -d paddleocr
 mvn spring-boot:run
 
 # Validación Java
@@ -70,6 +70,9 @@ mvn package
 
 # Pruebas del servicio OCR
 python -m unittest discover -s ocr/tests
+
+# Pruebas del frontend (sin npm)
+node --test src/test/js/*.test.mjs
 ```
 
 La aplicación web queda disponible en `http://localhost:8080`. El primer arranque del contenedor OCR puede tardar porque descarga los modelos.
@@ -88,6 +91,8 @@ No hay `package.json`; no ejecutar comandos npm para el frontend.
 - Si una marca no se reconoce, se usa `Genérico` según las reglas actuales. Las marcas dudosas deben conservar su estado/warning para revisión.
 - Las fechas y precios deben respetar las convenciones actuales de locale `es-AR`.
 - Los cambios de UI deben mantener sincronizados la tabla editable, el total, CSV/TSV, warnings y el envío con debounce de correcciones.
+- `ReceiptItem.memorizado` es independiente de `estado`: la memoria no debe quitar `AMBIGUOUS` cuando cantidad o precio requieren revisión. La UI puede mostrar ambos indicadores.
+- La recuperación de Sheets conserva solo UUID, destino y huella del intento en `sessionStorage`; no persistir productos ni OCR para resolver reintentos. Una falla al confirmar el intento anterior no debe generar otra escritura con un UUID nuevo.
 - No agregar Tesseract: los archivos en `tessdata/` son legado y el flujo actual usa PaddleOCR.
 
 ## Tests y cambios en el parser
@@ -99,6 +104,7 @@ Antes de considerar terminado un cambio relevante:
 3. Agregar o actualizar una prueba cuando se cambie una regla de fecha, comercio, marca, precio, cantidad, ambigüedad, memoria o exportación.
 4. Para una regresión OCR, preferir guardar texto de entrada reproducible y no imágenes que puedan contener datos personales.
 5. Si no es posible ejecutar una prueba por falta de Docker, modelos o dependencias, indicarlo claramente en el resultado final.
+6. Si se modifica `static/`, ejecutar `node --test src/test/js/*.test.mjs` sin instalar npm ni un bundler.
 
 ## Datos, configuración y seguridad
 
