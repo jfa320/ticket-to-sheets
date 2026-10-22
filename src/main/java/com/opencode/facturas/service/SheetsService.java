@@ -163,6 +163,38 @@ public class SheetsService {
                 sheetRange + "!A" + firstWriteRow + ":H" + lastWriteRow, rows.size(), false);
     }
 
+    public synchronized RecoveryResponse recover(RecoveryRequest request) {
+        if (request == null || request.requestId() == null
+                || !request.requestId().matches("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")) {
+            throw new IllegalArgumentException("La consulta debe incluir el UUID de la carga anterior.");
+        }
+        Destination destination = request.destination();
+        Settings settings = configuredSettings();
+        if (destination == null || !settings.spreadsheetId().equals(destination.spreadsheetId())
+                || settings.headerRow() != destination.headerRow()) {
+            throw new IllegalArgumentException("Volvé a la planilla de la carga anterior para confirmar su resultado.");
+        }
+        SheetsConfigStore.validateSheetName(destination.sheetName());
+        String key = METADATA_PREFIX + UUID.fromString(request.requestId());
+        JsonNode matches = client.findRequest(destination.spreadsheetId(), Map.of("dataFilters", List.of(
+                Map.of("developerMetadataLookup", Map.of("metadataKey", key, "visibility", "DOCUMENT")))))
+                .path("matchedDeveloperMetadata");
+        if (matches.isMissingNode() || (matches.isArray() && matches.isEmpty())) return new RecoveryResponse(false, null);
+        if (!matches.isArray() || matches.size() != 1) {
+            throw new IllegalStateException("No se pudo identificar una única carga anterior. Revisá la planilla.");
+        }
+        String[] marker = matches.get(0).path("developerMetadata").path("metadataValue").asText().split(":");
+        try {
+            if (marker.length != 4 || !marker[0].matches("[a-f0-9]{64}")
+                    || Integer.parseInt(marker[1]) != inspect(destination).sheetId()) throw new NumberFormatException();
+            int count = Math.subtractExact(Integer.parseInt(marker[3]), Integer.parseInt(marker[2])) + 1;
+            if (count < 1 || count > MAX_ITEMS) throw new NumberFormatException();
+            return new RecoveryResponse(true, previousResult(destination, matches, marker[0], count));
+        } catch (NumberFormatException | ArithmeticException ex) {
+            throw new IllegalStateException("El marcador de la carga anterior es inválido. Revisá la planilla antes de continuar.");
+        }
+    }
+
     private AppendResponse previousResult(Destination destination, JsonNode matches, String hash, int count) {
         if (matches.size() != 1) {
             throw new IllegalStateException("Hay más de un marcador para esta carga. Revisá la planilla antes de continuar.");

@@ -34,14 +34,16 @@ public class ReceiptController {
 
     @PostMapping(value = "/extract", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ExtractResponse extract(@RequestParam(value = "file", required = false) MultipartFile file,
-                                   @RequestHeader(value = "X-Extraction-Id", required = false) String extractionId) {
+                                   @RequestHeader(value = "X-Extraction-Id", required = false) String extractionId,
+                                   @RequestHeader(value = "X-OCR-Search-Budget-Seconds", required = false) Integer searchBudgetSeconds) {
         if (file == null || file.isEmpty()) {
             log.warn("Extracción rechazada: no se recibió un archivo");
             throw new IllegalArgumentException("Subi una imagen o PDF de la factura.");
         }
 
         log.info("Iniciando extracción: tipo={}, tamaño={} bytes", file.getContentType(), file.getSize());
-        OcrResult ocrResult = extractionId == null ? ocrService.extract(file) : ocrService.extract(file, extractionId);
+        OcrResult ocrResult = searchBudgetSeconds != null ? ocrService.extract(file, extractionId, searchBudgetSeconds)
+                : extractionId == null ? ocrService.extract(file) : ocrService.extract(file, extractionId);
         ExtractResponse response = parserService.parse(ocrResult)
                 .withOcrMetadata(ocrResult.variant(), ocrResult.score())
                 .withOcrReview(OcrReviewMapper.pages(ocrResult));

@@ -2,6 +2,7 @@ package com.opencode.facturas.service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -33,12 +34,17 @@ final class PedidosYaReceiptParser {
     }
 
     ParseResult parse(List<String> lines) {
+        return parse(lines, Map.of());
+    }
+
+    ParseResult parse(List<String> lines, Map<Integer, Boolean> uncertainByLine) {
         List<Candidate> candidates = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
         int start = orderStart(lines);
         int end = orderEnd(lines, start);
         boolean precedingQuantities = quantitiesPrecedeProducts(lines, start, end);
         String pendingQuantity = null;
+        boolean pendingQuantityUncertain = false;
 
         for (int index = start; index < end; index++) {
             String line = cleanProductLine(lines.get(index));
@@ -46,21 +52,26 @@ final class PedidosYaReceiptParser {
             if (isStandaloneQuantity(line)) {
                 if (precedingQuantities) {
                     pendingQuantity = extractQuantity(line).orElse(null);
+                    pendingQuantityUncertain = uncertainByLine.getOrDefault(index, false);
                 }
                 continue;
             }
             Optional<InlineItem> inlineItem = parseInlineItem(line, normalized);
             if (inlineItem.isPresent()) {
                 InlineItem item = inlineItem.get();
+                boolean usePendingQuantity = precedingQuantities && pendingQuantity != null && extractQuantity(line).isEmpty();
+                boolean uncertain = uncertainByLine.getOrDefault(index, false)
+                        || (usePendingQuantity && pendingQuantityUncertain);
+                if (uncertain) warnings.add("Revisá la lectura OCR de producto, cantidad o precio: " + line);
                 candidates.add(new Candidate(
                         item.description(),
                         item.price(),
-                        precedingQuantities && pendingQuantity != null && extractQuantity(line).isEmpty()
-                                ? pendingQuantity : item.quantity(),
-                        lineAnalyzer.isAmbiguous(line, normalized),
+                        usePendingQuantity ? pendingQuantity : item.quantity(),
+                        uncertain || lineAnalyzer.isAmbiguous(line, normalized),
                         line
                 ));
                 pendingQuantity = null;
+                pendingQuantityUncertain = false;
                 continue;
             }
 
@@ -75,29 +86,36 @@ final class PedidosYaReceiptParser {
                     warnings.add("Producto posible sin precio: " + line);
                 }
                 pendingQuantity = null;
+                pendingQuantityUncertain = false;
                 continue;
             }
 
             String quantity = productLine.quantity().orElse(precedingQuantities ? pendingQuantity : null);
+            boolean uncertain = uncertainByLine.getOrDefault(index, false)
+                    || uncertainByLine.getOrDefault(price.get().index(), false)
+                    || (productLine.quantity().isEmpty() && precedingQuantities && pendingQuantity != null && pendingQuantityUncertain);
             int consumedThrough = price.get().index();
             if (quantity == null && !precedingQuantities) {
                 Optional<LocatedQuantity> followingQuantity = findQuantityInFollowingLines(lines, consumedThrough + 1, end);
                 if (followingQuantity.isPresent()) {
                     quantity = followingQuantity.get().quantity();
                     consumedThrough = followingQuantity.get().index();
+                    uncertain |= uncertainByLine.getOrDefault(consumedThrough, false);
                 }
             }
+            if (uncertain) warnings.add("Revisá la lectura OCR de producto, cantidad o precio: " + line);
             candidates.add(new Candidate(
                     productLine.description(),
                     price.get().price(),
                     quantity == null ? "1" : quantity,
-                    lineAnalyzer.isAmbiguous(line, normalized),
+                    uncertain || lineAnalyzer.isAmbiguous(line, normalized),
                     line
             ));
             // The price row may include lettering from the package. Consume it
             // with its description so that lettering cannot become another item.
             index = consumedThrough;
             pendingQuantity = null;
+            pendingQuantityUncertain = false;
         }
 
         return new ParseResult(candidates, warnings);

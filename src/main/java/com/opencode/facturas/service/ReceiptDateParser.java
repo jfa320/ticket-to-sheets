@@ -39,8 +39,16 @@ final class ReceiptDateParser {
     }
 
     String extractNormalized(List<String> lines) {
-        return normalize(extract(lines).orElse(""));
+        return extractWithSource(lines).value();
     }
+
+    DateReading extractWithSource(List<String> lines) {
+        String raw = extract(lines).orElse("");
+        return new DateReading(normalize(raw), !raw.isBlank()
+                && raw.replace('-', '/').replace('.', '/').split("/").length == 2);
+    }
+
+    record DateReading(String value, boolean inferredYear) { }
 
     String normalize(String rawDate) {
         if (rawDate == null || rawDate.isBlank()) {

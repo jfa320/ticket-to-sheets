@@ -91,3 +91,26 @@ test('API uses local backend only and rejects unconfirmed results', async () => 
     const invalidApi = createSheetsApi(async () => ({ok: true, json: async () => ({appendedRows: 0})}));
     await assert.rejects(invalidApi.append({items: [item()]}), /confirmación inválida/);
 });
+
+test('recovery consults only the previous id and destination and rejects foreign confirmations', async () => {
+    const calls = [];
+    const query = {requestId: 'old-id', destination: config};
+    const result = {appendedRows: 1, sheetName: config.sheetName, updatedRange: 'Septiembre!A3:H3',
+        spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${config.spreadsheetId}/edit`};
+    const api = createSheetsApi(async (url, options) => {
+        calls.push({url, options}); return {ok: true, json: async () => ({committed: true, result})};
+    });
+    assert.equal((await api.lookup(query)).committed, true);
+    assert.equal(calls[0].url, '/api/sheets/status');
+    assert.deepEqual(JSON.parse(calls[0].options.body), query);
+    result.sheetName = 'Otra pestaña';
+    await assert.rejects(api.lookup(query), /confirmación inválida/);
+});
+
+test('a recovered previous upload is confirmed, not left marked as uncertain', async () => {
+    const error = new Error('La carga anterior ya está guardada'); error.previousCommitted = true;
+    const transfer = createSheetsTransfer({append: async () => { throw error; }, newRequestId: () => 'one'});
+    await assert.rejects(transfer.send(config, [item()]));
+    assert.equal(transfer.hasSuccess, true);
+    assert.equal(transfer.hasUnconfirmed, false);
+});

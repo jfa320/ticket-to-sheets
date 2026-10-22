@@ -46,6 +46,7 @@ function createApp() {
     let extract = async () => payload('Producto anterior');
     const dependencies = {
         ...model, validateFile,
+        createCorrectionManager() {},
         createReceiptExtraction: options => createReceiptExtraction({...options,
             extract: uploaded => { extractionCalls++; return extract(uploaded); },
             cancel: async () => ({cancelled: true}), createId: () => `extraction-${extractionCalls}`}),

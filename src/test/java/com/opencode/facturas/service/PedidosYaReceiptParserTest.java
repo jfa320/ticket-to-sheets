@@ -67,7 +67,8 @@ class PedidosYaReceiptParserTest {
         assertTrue(response.items().get(2).descripcion().startsWith("Tapas"));
         assertTrue(response.items().get(3).descripcion().startsWith("Hamburguesas"));
         assertEquals("AMBIGUOUS", response.items().get(3).estado());
-        assertTrue(response.warnings().isEmpty(), response.warnings().toString());
+        assertEquals(1, response.warnings().size(), response.warnings().toString());
+        assertTrue(response.warnings().get(0).contains("no indica año"));
         assertEquals(4, response.tsvWithoutHeader().lines().count());
         assertTrue(response.tsvWithoutHeader().lines().allMatch(line -> line.split("\t", -1).length == 7));
         assertTrue(response.tsvWithoutHeader().lines().allMatch(line -> line.endsWith("\t" + response.date())));

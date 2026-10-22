@@ -233,10 +233,10 @@ class ReceiptParserServiceTest {
 
         assertEquals(3, response.itemCount());
         assertEquals("Los Tres Corazones", response.storeName());
-        assertTrue(response.csv().contains("Suavizante 90oml|Querubin|Los Tres Corazones"), response.csv());
+        assertTrue(response.csv().contains("Suavizante 900ml|Querubin|Los Tres Corazones"), response.csv());
         assertTrue(response.csv().contains("|Supermercado|"), response.csv());
         assertTrue(response.csv().contains("Azucar 500gr|Hileret|Los Tres Corazones"));
-        assertTrue(response.csv().contains("Galletitas 17ogr|Parnor|Los Tres Corazones"));
+        assertTrue(response.csv().contains("Galletitas 170gr|Parnor|Los Tres Corazones"));
         assertTrue(response.tsvWithoutHeader().lines().noneMatch(line -> line.contains("$")));
     }
 

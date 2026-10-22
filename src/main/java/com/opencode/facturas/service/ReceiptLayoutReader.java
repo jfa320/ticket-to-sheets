@@ -3,6 +3,7 @@ package com.opencode.facturas.service;
 import com.opencode.facturas.model.OcrDetection;
 import com.opencode.facturas.model.OcrLine;
 import com.opencode.facturas.model.OcrResult;
+import com.opencode.facturas.model.ReceiptSource;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -42,13 +43,15 @@ final class ReceiptLayoutReader {
         Map<Integer, List<Candidate>> candidatesByLine = new LinkedHashMap<>();
         Map<Integer, Boolean> uncertainByLine = new LinkedHashMap<>();
 
-        for (OcrResult page : pages) {
+        Map<Integer, ReceiptSource> sources = new LinkedHashMap<>();
+        for (int pageIndex = 0; pageIndex < pages.size(); pageIndex++) {
+            OcrResult page = pages.get(pageIndex);
             List<Row> rows = rowsFromDetections(page.detections());
             if (rows.isEmpty()) {
                 rows = rowsFromLines(page.lines());
             }
 
-            appendRows(rows, lines, candidatesByLine, uncertainByLine);
+            appendRows(rows, lines, candidatesByLine, uncertainByLine, sources, pageIndex + 1);
         }
 
         if (lines.isEmpty() && result.text() != null) {
@@ -58,11 +61,11 @@ final class ReceiptLayoutReader {
                     .toList());
         }
 
-        return new Layout(lines, candidatesByLine, uncertainByLine);
+        return new Layout(lines, candidatesByLine, uncertainByLine, sources);
     }
 
     private void appendRows(List<Row> rows, List<String> lines, Map<Integer, List<Candidate>> candidatesByLine,
-                            Map<Integer, Boolean> uncertainByLine) {
+                            Map<Integer, Boolean> uncertainByLine, Map<Integer, ReceiptSource> sources, int pageNumber) {
         for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
             Row row = rows.get(rowIndex);
             if (lineAnalyzer.isProductFooter(lineAnalyzer.normalize(row.text()))) break;
@@ -74,6 +77,8 @@ final class ReceiptLayoutReader {
                     var quantityPrice = ReceiptQuantityReader.read(row.text(), candidate.rawPrice(), amounts);
                     if (quantityPrice.isPresent()) {
                         int lineIndex = lines.size();
+                        sources.put(lineIndex, new ReceiptSource(pageNumber, java.util.stream.Stream.concat(row.boxes.stream(), followingRow.boxes.stream())
+                                .map(Box::index).filter(index -> index >= 0).distinct().toList()));
                         lines.add(followingRow.text());
                         uncertainByLine.put(lineIndex, row.hasUncertainOcr() || followingRow.hasUncertainOcr());
                         candidatesByLine.put(lineIndex, List.of(new Candidate(
@@ -91,6 +96,7 @@ final class ReceiptLayoutReader {
             }
 
             int lineIndex = lines.size();
+            sources.put(lineIndex, new ReceiptSource(pageNumber, row.boxes.stream().map(Box::index).filter(index -> index >= 0).toList()));
             lines.add(row.text());
             uncertainByLine.put(lineIndex, row.hasUncertainOcr());
             row.candidate(lineAnalyzer, amounts).ifPresent(candidate ->
@@ -123,11 +129,11 @@ final class ReceiptLayoutReader {
         }
 
         double slope = receiptSlope(detections);
-        List<Box> boxes = detections.stream()
-                .map(this::boxFrom)
+        List<Box> boxes = java.util.stream.IntStream.range(0, detections.size()).mapToObj(index ->
+                        boxFrom(detections.get(index)).map(box -> new Box(box.text(), box.confidence(), box.top(), box.left(), box.right(), box.bottom(), index, box.reviewRequired())))
                 .flatMap(Optional::stream)
                 .map(box -> new Box(box.text(), box.confidence(), box.top() - slope * (box.left() + box.right()) / 2,
-                        box.left(), box.right(), box.bottom() - slope * (box.left() + box.right()) / 2))
+                        box.left(), box.right(), box.bottom() - slope * (box.left() + box.right()) / 2, box.index(), box.reviewRequired()))
                 .sorted(Comparator.comparingDouble(Box::top).thenComparingDouble(Box::left))
                 .toList();
         List<MutableRow> rows = new ArrayList<>();
@@ -171,7 +177,7 @@ final class ReceiptLayoutReader {
             return Optional.empty();
         }
 
-        return Optional.of(new Box(detection.text(), detection.confidence(), top, left, right, bottom));
+        return Optional.of(new Box(detection.text(), detection.confidence(), top, left, right, bottom, -1, detection.reviewRequired()));
     }
 
     private boolean sameRow(MutableRow row, Box box) {
@@ -210,14 +216,20 @@ final class ReceiptLayoutReader {
     }
 
     record Layout(List<String> lines, Map<Integer, List<Candidate>> candidatesByLine,
-                  Map<Integer, Boolean> uncertainByLine) {
+                  Map<Integer, Boolean> uncertainByLine, Map<Integer, ReceiptSource> sourcesByLine) {
+        Layout(List<String> lines, Map<Integer, List<Candidate>> candidatesByLine, Map<Integer, Boolean> uncertainByLine) {
+            this(lines, candidatesByLine, uncertainByLine, Map.of());
+        }
     }
 
     record Candidate(String description, String rawPrice, String quantity, boolean priceIsUnit,
                      boolean ambiguous, String sourceLine) {
     }
 
-    private record Box(String text, Double confidence, double top, double left, double right, double bottom) {
+    private record Box(String text, Double confidence, double top, double left, double right, double bottom, int index, boolean reviewRequired) {
+        Box(String text, Double confidence, double top, double left, double right, double bottom) {
+            this(text, confidence, top, left, right, bottom, -1, false);
+        }
 
         double width() {
             return right - left;
@@ -288,7 +300,7 @@ final class ReceiptLayoutReader {
         }
 
         boolean hasUncertainOcr() {
-            return boxes.stream().anyMatch(box -> box.confidence() != null && box.confidence() < LOW_CONFIDENCE_THRESHOLD
+            return boxes.stream().anyMatch(box -> box.reviewRequired() || box.confidence() != null && box.confidence() < LOW_CONFIDENCE_THRESHOLD
                     || box.isExtremelyWide());
         }
 

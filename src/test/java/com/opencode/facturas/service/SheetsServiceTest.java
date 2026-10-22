@@ -209,4 +209,36 @@ class SheetsServiceTest {
         assertThat(service.getConfig().headerRow()).isEqualTo(2);
         verifyNoInteractions(client);
     }
+
+    @Test void recoversACommittedUploadReadOnlyWithoutTheOriginalRows() {
+        service.append(request());
+        JsonNode batch = writtenBatch();
+        String marker = batch.findValue("createDeveloperMetadata").path("developerMetadata").path("metadataValue").asText();
+        when(client.findRequest(eq(ID), any())).thenReturn(mapper.valueToTree(Map.of("matchedDeveloperMetadata", List.of(
+                Map.of("developerMetadata", Map.of("metadataValue", marker))))));
+        clearInvocations(client);
+        var response = service.recover(new RecoveryRequest(UUID, destination));
+        assertThat(response.committed()).isTrue();
+        assertThat(response.result().duplicate()).isTrue();
+        assertThat(response.result().appendedRows()).isEqualTo(1);
+        verify(client, never()).batchUpdate(anyString(), any());
+    }
+
+    @Test void recoveryReportsAbsentMarkersAndRejectsInvalidDestinationsBeforeNetwork() {
+        assertThat(service.recover(new RecoveryRequest(UUID, destination)).committed()).isFalse();
+        clearInvocations(client);
+        assertThatThrownBy(() -> service.recover(new RecoveryRequest(UUID,
+                new Destination("other_sheet_id_1234567890", TAB, 2)))).hasMessageContaining("planilla");
+        assertThatThrownBy(() -> service.recover(new RecoveryRequest("invalid", destination))).hasMessageContaining("UUID");
+        verifyNoInteractions(client);
+    }
+
+    @Test void recoveryRejectsACorruptOrForeignSheetMarker() {
+        for (String marker : List.of("broken", "a".repeat(64) + ":99:4:4", "a".repeat(64) + ":42:4:999")) {
+            when(client.findRequest(eq(ID), any())).thenReturn(mapper.valueToTree(Map.of("matchedDeveloperMetadata", List.of(
+                    Map.of("developerMetadata", Map.of("metadataValue", marker))))));
+            assertThatThrownBy(() -> service.recover(new RecoveryRequest(UUID, destination))).isInstanceOf(IllegalStateException.class);
+        }
+        verify(client, never()).batchUpdate(anyString(), any());
+    }
 }

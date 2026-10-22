@@ -8,6 +8,14 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.*;
 
 class HistoryProductMatcherTest {
+    @Test void personalMemoryRemainsAuthoritativeWhenItsPriceNeedsReview() {
+        var matcher = new HistoryProductMatcher(List.of(product("Jabón neutro 500g", "Marca Prueba", "Limpieza")));
+        var learned = new ReceiptItem("Nombre personal", "Genérico", "Comercio prueba", "Otros",
+                "1", "1200,00", "4/10/2026", "AMBIGUOUS", "jabon neutro 500g", true);
+        List<String> warnings = new ArrayList<>();
+        assertThat(matcher.enrich(learned, warnings)).isSameAs(learned);
+        assertThat(warnings).isEmpty();
+    }
     private Product product(String description, String brand, String category) {
         return new Product(description, brand, "Comercio prueba", category);
     }

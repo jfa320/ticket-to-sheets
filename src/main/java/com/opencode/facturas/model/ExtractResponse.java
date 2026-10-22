@@ -103,6 +103,10 @@ public record ExtractResponse(
         return new ExtractResponse(storeName, date, itemCount, total, csv, tsv, tsvWithoutHeader, rawText, items, variant, score, warnings, ocrReview, subtotal, discountTotal, discounts);
     }
 
+    public ExtractResponse withItems(List<ReceiptItem> rows) {
+        return new ExtractResponse(storeName, date, itemCount, total, csv, tsv, tsvWithoutHeader, rawText, rows, variant, score, warnings, ocrReview, subtotal, discountTotal, discounts);
+    }
+
     public ExtractResponse withOcrReview(List<OcrReviewPage> review) {
         return new ExtractResponse(storeName, date, itemCount, total, csv, tsv, tsvWithoutHeader, rawText, items, variant, score, warnings, review, subtotal, discountTotal, discounts);
     }

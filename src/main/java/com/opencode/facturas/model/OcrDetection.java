@@ -8,6 +8,10 @@ import java.util.List;
 public record OcrDetection(
         String text,
         Double confidence,
-        List<List<Double>> box
+        List<List<Double>> box,
+        boolean reviewRequired
 ) {
+    public OcrDetection(String text, Double confidence, List<List<Double>> box) {
+        this(text, confidence, box, false);
+    }
 }

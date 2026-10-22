@@ -105,6 +105,7 @@ class OcrApiClient {
         headers.setAccept(List.of(MediaType.APPLICATION_JSON));
         headers.set("X-OCR-Language", language);
         if (task.id != null) headers.set("X-Extraction-Id", task.id);
+        if (task.searchBudgetSeconds != null) headers.set("X-OCR-Search-Budget-Seconds", task.searchBudgetSeconds.toString());
 
         HttpEntity<byte[]> request = new HttpEntity<>(toPngBytes(image), headers);
         task.checkCancelled();

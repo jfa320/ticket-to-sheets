@@ -98,7 +98,8 @@ class OcrResultMapper {
             detections.add(new OcrDetection(
                     text,
                     optionalDouble(detection.path("confidence")),
-                    parseBox(detection.path("box"))
+                    parseBox(detection.path("box")),
+                    detection.path("reviewRequired").asBoolean(false)
             ));
         }
         return detections;

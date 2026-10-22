@@ -29,4 +29,8 @@ public final class SheetsModels {
 
     public record AppendResponse(String spreadsheetUrl, String sheetName, String updatedRange,
                                  int appendedRows, boolean duplicate) { }
+
+    public record RecoveryRequest(String requestId, Destination destination) { }
+
+    public record RecoveryResponse(boolean committed, AppendResponse result) { }
 }

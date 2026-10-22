@@ -11,6 +11,12 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
+import com.opencode.facturas.model.CorrectionManagement.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -55,6 +61,23 @@ public class CorrectionController {
         log.info("Correcciones procesadas: recibidas={}, guardadas={}, comercio='{}'",
                 corrections.size(), saved, request.store());
         return new LearnResponse(saved);
+    }
+
+    @GetMapping("/corrections")
+    public Page list(@RequestParam(defaultValue="") String q, @RequestParam(defaultValue="0") int offset,
+                     @RequestParam(defaultValue="25") int limit) {
+        return correctionMemory.list(q, offset, limit);
+    }
+
+    @PutMapping(value="/corrections", consumes=MediaType.APPLICATION_JSON_VALUE)
+    public ManagedCorrection edit(@RequestBody @Valid Edit request) {
+        return correctionMemory.replace(request);
+    }
+
+    @DeleteMapping(value="/corrections", consumes=MediaType.APPLICATION_JSON_VALUE)
+    public Map<String, Boolean> remove(@RequestBody @Valid Remove request) {
+        correctionMemory.remove(request.store(), request.firma(), request.version());
+        return Map.of("deleted", true);
     }
 
     private void rememberBrandIfValid(String marca) {

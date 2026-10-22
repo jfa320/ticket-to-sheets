@@ -110,8 +110,15 @@ public class OcrService {
     }
 
     public OcrResult extract(MultipartFile file, String extractionId) {
+        return extract(file, extractionId, null);
+    }
+
+    public OcrResult extract(MultipartFile file, String extractionId, Integer searchBudgetSeconds) {
+        if (searchBudgetSeconds != null && (searchBudgetSeconds < 5 || searchBudgetSeconds > 180)) {
+            throw new IllegalArgumentException("El presupuesto OCR debe estar entre 5 y 180 segundos.");
+        }
         if (extractionId != null) validateExtractionId(extractionId);
-        ExtractionTask task = beginExtraction(extractionId);
+        ExtractionTask task = beginExtraction(extractionId, searchBudgetSeconds);
         try {
             OcrResult result = extractFile(file, task);
             task.checkCancelled();
@@ -138,7 +145,7 @@ public class OcrService {
         apiClient.cancel(extractionId);
     }
 
-    private ExtractionTask beginExtraction(String extractionId) {
+    private ExtractionTask beginExtraction(String extractionId, Integer searchBudgetSeconds) {
         synchronized (extractionMonitor) {
             pruneCancelledExtractions();
             while (true) {
@@ -146,7 +153,7 @@ public class OcrService {
                     throw new ExtractionCancelledException();
                 }
                 if (activeExtraction == null) {
-                    activeExtraction = new ExtractionTask(extractionId);
+                    activeExtraction = new ExtractionTask(extractionId, searchBudgetSeconds);
                     return activeExtraction;
                 }
                 if (!activeExtraction.isCancelled()) throw new ExtractionBusyException();
@@ -302,7 +309,7 @@ public class OcrService {
 
     private OcrResult runPaddle(BufferedImage image, ExtractionTask task) {
         try {
-            String output = task.id == null ? apiClient.recognize(image) : apiClient.recognize(image, task);
+            String output = task.id == null && task.searchBudgetSeconds == null ? apiClient.recognize(image) : apiClient.recognize(image, task);
             task.checkCancelled();
             OcrResult result = resultMapper.parse(output);
             if (result.text() == null || result.text().isBlank()) {

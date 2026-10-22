@@ -9,8 +9,8 @@ export function normalizeReview(pages) {
             typeof page.imageDataUrl === 'string' && page.imageDataUrl.length <= 1500000 &&
             /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(page.imageDataUrl) ? page.imageDataUrl : null;
         const source = page.source === 'pdf-text' ? 'pdf-text' : 'ocr';
-        const detections = (Array.isArray(page.detections) ? page.detections : []).filter(item =>
-            item && typeof item.text === 'string' && item.text.trim()).map((item, position) => {
+        const detections = (Array.isArray(page.detections) ? page.detections : []).map((item, position) => {
+            if (!item || typeof item.text !== 'string' || !item.text.trim()) return null;
             const confidence = typeof item.confidence === 'number' && Number.isFinite(item.confidence) &&
                 item.confidence >= 0 && item.confidence <= 1 ? item.confidence : null;
             const box = Array.isArray(item.box) && item.box.length === 4 && item.box.every(point =>
@@ -19,10 +19,10 @@ export function normalizeReview(pages) {
                     height ? Math.max(0, Math.min(height, y)) : y]) : null;
             const bounds = box ? {left: Math.min(...box.map(p => p[0])), top: Math.min(...box.map(p => p[1])),
                 right: Math.max(...box.map(p => p[0])), bottom: Math.max(...box.map(p => p[1]))} : null;
-            return {id: position, text: item.text, confidence,
-                doubtful: source === 'ocr' && (confidence === null || confidence < 0.8),
+            return {id: position, text: item.text, confidence, reviewRequired: item.reviewRequired === true,
+                doubtful: source === 'ocr' && (item.reviewRequired === true || confidence === null || confidence < 0.8),
                 box: bounds && bounds.right > bounds.left && bounds.bottom > bounds.top ? box : null, bounds};
-        });
+        }).filter(Boolean);
         return {pageNumber: Number.isInteger(page.pageNumber) && page.pageNumber > 0 ? page.pageNumber : index + 1,
             source, width, height, imageDataUrl, detections};
     });
@@ -38,14 +38,32 @@ export function cropCoordinates(bounds, page, naturalWidth, naturalHeight) {
         width: (right - left) * naturalWidth / page.width, height: (bottom - top) * naturalHeight / page.height};
 }
 
+export function sourceSelection(pages, sources) {
+    for (const source of Array.isArray(sources) ? sources : []) {
+        const pageIndex = pages.findIndex(page => page.pageNumber === source?.pageNumber);
+        const page = pages[pageIndex];
+        if (!page?.imageDataUrl || !Array.isArray(source.detectionIndices)) continue;
+        const detections = source.detectionIndices.map(id => page.detections.find(item => item.id === id));
+        if (!detections.length || detections.some(item => !item?.box)) continue;
+        const bounds = {left: Math.min(...detections.map(item => item.bounds.left)),
+            top: Math.min(...detections.map(item => item.bounds.top)), right: Math.max(...detections.map(item => item.bounds.right)),
+            bottom: Math.max(...detections.map(item => item.bounds.bottom))};
+        return {pageIndex, item: {...detections[0], ids: detections.map(item => item.id), bounds,
+            text: detections.map(item => item.text).join(' · '),
+            confidence: detections.some(item => item.confidence === null) ? null : Math.min(...detections.map(item => item.confidence))}};
+    }
+    return null;
+}
+
 export function createOcrReview(root = document) {
     const el = suffix => root.getElementById(`ocrReview${suffix}`);
     const panel = el('Panel'), picker = el('Page'), all = el('ShowAll'), zoom = el('Zoom');
     const stage = el('ImageStage'), viewport = el('ImageViewport'), list = el('Detections');
     let pages = [], page = null, selected = null, image = null, generation = 0;
     let buttons = new Map(), polygons = new Map();
-    const confidenceLabel = item => item.confidence === null ? 'Sin confianza informada' :
-        `Confianza OCR: ${item.confidence.toLocaleString('es-AR', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+    const confidenceLabel = item => (item.reviewRequired ? 'Importe para confirmar en la imagen. ' : '') +
+        (item.confidence === null ? 'Sin confianza informada' :
+        `Confianza OCR: ${item.confidence.toLocaleString('es-AR', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`);
 
     function drawCrop() {
         const canvas = el('Crop');
@@ -72,8 +90,9 @@ export function createOcrReview(root = document) {
 
     function select(item, reveal = false) {
         selected = item;
-        buttons.forEach((button, id) => button.setAttribute('aria-pressed', String(id === item.id)));
-        polygons.forEach((polygon, id) => polygon.setAttribute('aria-pressed', String(id === item.id)));
+        const selectedIds = new Set(item.ids || [item.id]);
+        buttons.forEach((button, id) => button.setAttribute('aria-pressed', String(selectedIds.has(id))));
+        polygons.forEach((polygon, id) => polygon.setAttribute('aria-pressed', String(selectedIds.has(id))));
         el('Selection').classList.remove('hidden');
         el('SelectedText').textContent = item.text;
         el('SelectedConfidence').textContent = page.source === 'pdf-text' ? 'Texto digital del PDF; no requiere reconocimiento OCR.' : confidenceLabel(item);
@@ -150,5 +169,13 @@ export function createOcrReview(root = document) {
         panel.classList.toggle('hidden', pages.length === 0); renderPage();
     }
     picker.addEventListener('change', renderPage); all.addEventListener('change', renderPage); zoom.addEventListener('change', drawCrop);
-    return {setPages, clear: () => setPages([])};
+    return {setPages, clear: () => setPages([]), canShowSources: sources => Boolean(sourceSelection(pages, sources)),
+        showSources(sources) {
+            const selection = sourceSelection(pages, sources);
+            if (!selection) return false;
+            picker.value = String(selection.pageIndex); all.checked = true; panel.open = true;
+            renderPage(); select(selection.item, true);
+            panel.scrollIntoView({block: 'start'}); el('SelectedText').focus();
+            return true;
+        }};
 }

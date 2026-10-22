@@ -8,6 +8,7 @@ import {createCorrectionSaver} from './receipt-corrections.mjs?v=2';
 import {renderItems, renderWarnings, renderDiscounts, markInvalidCells} from './receipt-view.mjs';
 import {createOcrReview} from './ocr-review.mjs';
 import {createSheetsPanel} from './receipt-sheets.mjs?v=2';
+import {createCorrectionManager} from './correction-manager.mjs';
 
 const byId = id => document.getElementById(id);
 const form = byId('uploadForm');
@@ -48,6 +49,8 @@ let undoTimer = null;
 let removedItem = null;
 let previewUrl = null;
 let sheetsBusy = false;
+createCorrectionManager({beforeOpen: async () => !correctionSaver || await correctionSaver.flush()});
+byId('reviewFilter').addEventListener('change', () => { if (receipt) renderTable(); });
 const sheetsPanel = createSheetsPanel({
     getItems: () => receipt ? buildExportItems(receipt.items, receipt.discounts, receipt) : [],
     onBusy(busy) { sheetsBusy = busy; updateUploadControls(); },
@@ -214,6 +217,7 @@ function clearReceiptState() {
 }
 
 function refresh() {
+    if (receipt) byId('reviewCount').textContent = `${receipt.items.filter(item => item.estado === 'AMBIGUOUS' && !item.revisado).length} fila(s) pendiente(s) de revisión.`;
     if (!receipt) return;
     sheetsPanel.refresh();
     output = buildExports(receipt.items, receipt.discounts, receipt);
@@ -243,8 +247,19 @@ function renderTable() {
     byId('emptyItems').classList.toggle('hidden', hasItems);
     document.querySelector('.table-scroll').classList.toggle('hidden', !hasItems);
     renderItems(receipt.items, itemsBody, {
+        pendingOnly: byId('reviewFilter').value === 'pending',
+        canReview: item => ocrReview.canShowSources(item.fuentesOcr),
+        onReview: item => ocrReview.showSources(item.fuentesOcr),
+        onReviewed(item) {
+            if (!item.revisado && validationErrors([{...item, usar: true}]).length) {
+                showCopyToast('Corregí los campos inválidos antes de marcar la fila como revisada.', true);
+                return;
+            }
+            item.revisado = !item.revisado; renderTable();
+        },
         onEdit(item, field, value) {
             item[field] = value;
+            item.revisado = false;
             refresh();
             if (['descripcion', 'marca', 'categoria', 'lugarDeCompra'].includes(field)) correctionSaver.schedule();
         },
@@ -262,6 +277,9 @@ function renderTable() {
             showUndoToast();
         }
     });
+    const pending = receipt.items.filter(item => item.estado === 'AMBIGUOUS' && !item.revisado).length;
+    byId('reviewCount').textContent = `${pending} fila(s) pendiente(s) de revisión.`;
+    byId('reviewEmpty').classList.toggle('hidden', byId('reviewFilter').value !== 'pending' || pending > 0);
     refresh();
 }
 
@@ -291,9 +309,9 @@ function updateCommonField(field, value) {
     const cleaned = value.trim();
     if (field === 'fecha') receipt.date = cleaned;
     if (field === 'lugarDeCompra') receipt.storeName = cleaned;
-    receipt.items.forEach(item => { item[field] = cleaned; });
+    receipt.items.forEach(item => { item[field] = cleaned; item.revisado = false; });
     itemsBody.querySelectorAll(`[data-field="${field}"]`).forEach(cell => { cell.textContent = cleaned; });
-    refresh();
+    renderTable();
     if (field === 'lugarDeCompra') correctionSaver.schedule();
 }
 

@@ -33,4 +33,9 @@ public class SheetsController {
     public AppendResponse append(@RequestBody AppendRequest request) {
         return sheets.append(request);
     }
+
+    @PostMapping(value = "/status", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public RecoveryResponse status(@RequestBody RecoveryRequest request) {
+        return sheets.recover(request);
+    }
 }

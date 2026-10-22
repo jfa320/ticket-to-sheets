@@ -14,6 +14,44 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ReceiptParsingComponentsTest {
+    @Test
+    void reportsInferredYearOnlyForTheDateActuallyChosen() {
+        ReceiptDateParser parser = new ReceiptDateParser(new ReceiptLineAnalyzer(),
+                Clock.fixed(Instant.parse("2026-10-22T00:00:00Z"), ZoneOffset.UTC));
+        var inferred = parser.extractWithSource(List.of("Entregado 09 de oct"));
+        assertEquals("9/10/2026", inferred.value());
+        assertTrue(inferred.inferredYear());
+        assertFalse(parser.extractWithSource(List.of("Entregado 09 de oct", "Fecha 08/10/2025")).inferredYear());
+        assertFalse(parser.extractWithSource(List.of("Fecha 09/10/26")).inferredYear());
+        assertFalse(parser.extractWithSource(List.of("sin fecha")).inferredYear());
+    }
+
+    @Test
+    void preservesUncertainPrecedingAndFollowingPedidosYaQuantities() {
+        var parser = new PedidosYaReceiptParser(new ReceiptLineAnalyzer());
+        var preceding = parser.parse(List.of("Tu pedido", "2x", "Naranja Comercial", "$1000,00", "Tu pago"),
+                java.util.Map.of(1, true));
+        var following = parser.parse(List.of("Tu pedido", "Naranja Comercial", "$1000,00", "2x", "Tu pago"),
+                java.util.Map.of(3, true));
+        assertTrue(preceding.candidates().get(0).ambiguous());
+        assertTrue(following.candidates().get(0).ambiguous());
+        assertEquals(1, preceding.warnings().size());
+        assertEquals(1, following.warnings().size());
+    }
+
+    @Test
+    void ignoresUncertaintyInUnusedPedidosYaInterfaceAndSupersededQuantities() {
+        var parser = new PedidosYaReceiptParser(new ReceiptLineAnalyzer());
+        var result = parser.parse(List.of("Tu pedido", "Naranja Comercial", "50%OFF", "$1000,00", "1x", "Tu pago"),
+                java.util.Map.of(0, true, 2, true, 5, true));
+        assertFalse(result.candidates().get(0).ambiguous());
+        assertTrue(result.warnings().isEmpty());
+        var inline = parser.parse(List.of("Tu pedido", "1x", "Naranja Comercial $1000,00 2x", "Tu pago"),
+                java.util.Map.of(1, true));
+        assertEquals("2", inline.candidates().get(0).quantity());
+        assertFalse(inline.candidates().get(0).ambiguous());
+        assertTrue(inline.warnings().isEmpty());
+    }
 
     private final ReceiptLineAnalyzer lineAnalyzer = new ReceiptLineAnalyzer();
 

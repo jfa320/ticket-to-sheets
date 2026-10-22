@@ -47,10 +47,17 @@ export function renderWarnings(warnings, panel, list) {
     });
 }
 
-export function renderItems(items, body, {onEdit, onSelect, onRemove}) {
+export function renderItems(items, body, {onEdit, onSelect, onRemove, onReview, canReview, onReviewed, pendingOnly = false}) {
     body.replaceChildren();
     items.forEach((item, index) => {
+        if (pendingOnly && (item.estado !== 'AMBIGUOUS' || item.revisado)) return;
         const row = document.createElement('tr');
+        function edited(field, value) {
+            onEdit(item, field, value);
+            row.querySelector('.status-reviewed')?.remove();
+            const toggle = row.querySelector('[data-review-toggle]');
+            if (toggle) { toggle.textContent = 'Marcar revisada'; toggle.setAttribute('aria-pressed', 'false'); }
+        }
         row.classList.toggle('ambiguous-row', item.estado === 'AMBIGUOUS');
         row.classList.toggle('excluded-row', item.usar === false);
         const useCell = document.createElement('td');
@@ -78,7 +85,7 @@ export function renderItems(items, body, {onEdit, onSelect, onRemove}) {
                 input.className = 'editable-input';
                 input.value = item[field] ?? '';
                 input.setAttribute('aria-label', `${label}, fila ${index + 1}`);
-                input.addEventListener('input', () => onEdit(item, field, input.value.trim()));
+                input.addEventListener('input', () => edited(field, input.value.trim()));
                 cell.append(input);
             } else {
                 cell.textContent = item[field] ?? '';
@@ -90,7 +97,7 @@ export function renderItems(items, body, {onEdit, onSelect, onRemove}) {
                 cell.addEventListener('keydown', event => {
                     if (event.key === 'Enter') { event.preventDefault(); cell.blur(); }
                 });
-                cell.addEventListener('input', () => onEdit(item, field, cell.textContent.trim()));
+                cell.addEventListener('input', () => edited(field, cell.textContent.trim()));
             }
             row.append(cell);
         }
@@ -104,10 +111,35 @@ export function renderItems(items, body, {onEdit, onSelect, onRemove}) {
         badge.className = `status-badge status-${state}`;
         badge.textContent = label;
         stateCell.append(badge);
+        if (item.revisado) {
+            const reviewed = document.createElement('span');
+            reviewed.className = 'status-badge status-reviewed'; reviewed.textContent = 'Revisada';
+            stateCell.append(reviewed);
+        }
+        if (item.memorizado && item.estado !== 'LEARNED') {
+            const learnedBadge = document.createElement('span');
+            learnedBadge.className = 'status-badge status-learned';
+            learnedBadge.textContent = 'Memorizado';
+            stateCell.append(learnedBadge);
+        }
         row.append(stateCell);
 
         const actionCell = document.createElement('td');
         actionCell.dataset.label = 'Acciones';
+        if (onReview) {
+            const review = document.createElement('button');
+            review.type = 'button'; review.textContent = 'Ver en imagen'; review.className = 'row-review';
+            review.disabled = !canReview?.(item); review.setAttribute('aria-label', `Ver fila ${index + 1} en la imagen`);
+            review.title = review.disabled ? 'No hay coordenadas de imagen para esta fila.' : 'Comparar texto, cantidad y precio con el recorte';
+            review.addEventListener('click', () => onReview(item)); actionCell.append(review);
+        }
+        if (onReviewed && item.estado === 'AMBIGUOUS') {
+            const reviewed = document.createElement('button');
+            reviewed.type = 'button'; reviewed.textContent = item.revisado ? 'Reabrir revisión' : 'Marcar revisada';
+            reviewed.dataset.reviewToggle = 'true';
+            reviewed.setAttribute('aria-pressed', String(Boolean(item.revisado)));
+            reviewed.addEventListener('click', () => onReviewed(item)); actionCell.append(reviewed);
+        }
         const removeButton = document.createElement('button');
         removeButton.type = 'button';
         removeButton.className = 'remove-row';

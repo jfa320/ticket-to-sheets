@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/styles.css?v=14">
+    <link rel="stylesheet" href="/styles.css?v=15">
 </head>
 <body>
 <main class="shell">
@@ -19,6 +19,7 @@
         <p class="eyebrow">Carga simple de facturas</p>
         <h1>Subí una factura y cargá sus productos en Google Sheets.</h1>
         <p class="lead">Subí una imagen o PDF, revisá los datos y envialos a tu planilla con un botón.</p>
+        <button id="correctionsOpen" type="button" aria-haspopup="dialog" aria-controls="correctionsDialog">Administrar correcciones aprendidas</button>
         <ol class="flow-steps" aria-label="Flujo de trabajo">
             <li class="flow-step flow-step-active">Cargar</li>
             <li class="flow-step">Revisar</li>
@@ -78,6 +79,18 @@
             <p id="sheetsHistoryStatus" class="sheets-feedback" role="status" aria-live="polite" aria-atomic="true">Consultando el historial…</p>
         </div>
     </section>
+    </dialog>
+    <dialog id="correctionsDialog" class="corrections-dialog" aria-labelledby="correctionsTitle">
+        <div class="output-header"><h2 id="correctionsTitle">Correcciones aprendidas</h2><button id="correctionsClose" type="button">Cerrar</button></div>
+        <p>Buscá por comercio, texto OCR, descripción, marca o categoría. Los cambios se aplican a próximas extracciones.</p>
+        <form id="correctionsSearch"><fieldset id="correctionsFields">
+            <label for="correctionsQuery">Buscar correcciones</label>
+            <input id="correctionsQuery" type="search" maxlength="300">
+            <button type="submit">Buscar</button>
+        </fieldset></form>
+        <p id="correctionsStatus" role="status" aria-live="polite"></p>
+        <div id="correctionsList" class="corrections-list"></div>
+        <nav aria-label="Páginas de correcciones"><button id="correctionsPrevious" type="button">Anterior</button> <button id="correctionsNext" type="button">Siguiente</button></nav>
     </dialog>
 
     <section class="panel uploader">
@@ -170,7 +183,7 @@
                     <ol id="ocrReviewDetections" class="ocr-detection-list" aria-label="Zonas para revisar"></ol>
                     <div id="ocrReviewSelection" class="ocr-selection hidden" aria-live="polite">
                         <h3>Zona seleccionada</h3>
-                        <p id="ocrReviewSelectedText" class="ocr-selected-text"></p>
+                        <p id="ocrReviewSelectedText" class="ocr-selected-text" tabindex="-1"></p>
                         <p id="ocrReviewSelectedConfidence" class="ocr-review-hint"></p>
                         <label class="ocr-page-picker" for="ocrReviewZoom">Ampliación
                             <select id="ocrReviewZoom"><option value="2">2×</option><option value="4" selected>4×</option><option value="8">8×</option></select>
@@ -188,11 +201,16 @@
             <div class="output-header">
                 <div>
                     <h2>2. Revisar filas detectadas</h2>
-                    <span>Revisá y corregí los datos antes de exportar. Descripción, marca y categoría se guardan cuando la marca original y la corregida son reconocidas.</span>
+                    <span>Revisá y corregí los datos antes de exportar. Los cambios de descripción, marca y categoría se recuerdan para próximos tickets del mismo comercio.</span>
                 </div>
                 <button id="addItem" class="add-item-button" type="button">＋ Agregar línea</button>
             </div>
             <p id="emptyItems" class="empty-items hidden">No hay productos para revisar.</p>
+            <div class="review-toolbar"><label for="reviewFilter">Mostrar filas</label>
+                <select id="reviewFilter"><option value="all">Todas</option><option value="pending">Pendientes de revisión</option></select>
+                <span id="reviewCount" role="status" aria-live="polite"></span>
+            </div>
+            <p id="reviewEmpty" class="helper hidden">No quedan filas ambiguas pendientes. Elegí “Todas” para ver las filas revisadas.</p>
             <div class="table-scroll" tabindex="0" role="region" aria-label="Filas editables de la factura">
                 <table id="itemsTable">
                     <caption class="sr-only">Productos detectados y campos editables de la factura</caption>
@@ -277,6 +295,6 @@
     <div id="filePreviewContent" class="file-preview-content"></div>
 </dialog>
 
-<script type="module" src="/app.js?v=19"></script>
+<script type="module" src="/app.js?v=20"></script>
 </body>
 </html>

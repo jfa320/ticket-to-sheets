@@ -1,5 +1,6 @@
 import {COLUMNS, validationErrors, toDateInputValue, formatDateForItems} from './receipt-model.mjs';
 import {MONTH_NAMES, createMonthlyDestination} from './monthly-sheets.mjs?v=2';
+import {createRecoverableSheetsAppend} from './sheets-transfer-journal.mjs';
 
 export function spreadsheetIdFromInput(value) {
     const text = String(value ?? '').trim();
@@ -57,8 +58,8 @@ export function createSheetsTransfer({append, newRequestId = () => crypto.random
     let pending = null;
     return {
         get busy() { return Boolean(pending); },
-        get hasSuccess() { return [...attempts.values()].some(attempt => attempt.status === 'success'); },
-        get hasUnconfirmed() { return [...attempts.values()].some(attempt => attempt.status === 'error'); },
+        get hasSuccess() { return [...attempts.values()].some(attempt => attempt.status === 'success' || attempt.error?.previousCommitted); },
+        get hasUnconfirmed() { return [...attempts.values()].some(attempt => attempt.status === 'error' && !attempt.error?.previousCommitted); },
         state(config, items, destination = config) {
             const key = sheetsSnapshotKey(config, items, destination);
             return {...(attempts.get(key) || {status: 'ready'}), key};
@@ -126,6 +127,17 @@ export function createSheetsApi(fetchImpl = (...args) => fetch(...args)) {
             spreadsheetId: config.spreadsheetId, headerRow: config.headerRow, configVersion: config.configVersion
         }),
         removeHistory: () => request('history', 'DELETE'),
+        async lookup(payload) {
+            const response = await request('status', 'POST', payload);
+            const result = response.result;
+            if (typeof response.committed !== 'boolean' || (response.committed
+                    && (!result || !Number.isInteger(result.appendedRows) || result.appendedRows < 1
+                    || typeof result.updatedRange !== 'string' || result.sheetName !== payload.destination.sheetName
+                    || spreadsheetIdFromInput(result.spreadsheetUrl) !== payload.destination.spreadsheetId))) {
+                throw new Error('La aplicación devolvió una confirmación inválida de la carga anterior.');
+            }
+            return response;
+        },
         async append(payload) {
             const result = await request('append', 'POST', payload);
             if (result.appendedRows !== payload.items.length || typeof result.updatedRange !== 'string'
@@ -202,7 +214,9 @@ export function createSheetsPanel({getItems, onBusy, onSuccess, api = createShee
     const monthMappings = byId('sheetsMonthMappings');
     const settingsDialog = byId('sheetsSettingsDialog');
     const monthlyDestination = createMonthlyDestination();
-    const transfer = createSheetsTransfer({append: payload => api.append(payload)});
+    const transfer = createSheetsTransfer({append: createRecoverableSheetsAppend({
+        append: payload => api.append(payload), lookup: payload => api.lookup(payload)
+    })});
     const history = createSheetsHistory({api});
     const historyStatus = byId('sheetsHistoryStatus');
     let historyMessage = '';
@@ -373,7 +387,8 @@ export function createSheetsPanel({getItems, onBusy, onSuccess, api = createShee
             return;
         }
         appendButton.disabled = blocked || !target.sheetName;
-        appendButton.textContent = state.status === 'error' ? `Reintentar carga en ${target.label || 'Google Sheets'}`
+        appendButton.textContent = state.error?.previousCommitted ? `Iniciar nueva carga en ${target.label || 'Google Sheets'}`
+            : state.status === 'error' ? `Reintentar carga en ${target.label || 'Google Sheets'}`
             : target.label ? `Cargar en ${target.label}` : 'Cargar en Google Sheets';
         if (!target.sheetName) {
             feedback(appendStatus, target.message);
@@ -386,7 +401,8 @@ export function createSheetsPanel({getItems, onBusy, onSuccess, api = createShee
         try { count = buildSheetsItems(getItems()).length; }
         catch (error) { appendButton.disabled = true; feedback(appendStatus, error.message); return; }
         feedback(appendStatus, state.status === 'error'
-            ? `${state.error.message} Reintentá la misma carga para confirmar si se guardó.`
+            ? state.error.previousCommitted ? state.error.message
+                : `${state.error.message} Reintentá la misma carga para confirmar si se guardó.`
             : `${warning}Se ${count === 1 ? 'cargará 1 ítem' : `cargarán ${count} ítems`} en ${target.label}.`, state.status === 'error' || transfer.hasUnconfirmed);
         if (!count) appendButton.disabled = true;
     }

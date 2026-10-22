@@ -134,7 +134,8 @@ public class ReceiptParserService {
         String rawText = ocrResult.text() == null || ocrResult.text().isBlank()
                 ? String.join("\n", layout.lines())
                 : ocrResult.text();
-        return parseLines(rawText, layout.lines(), layout.candidatesByLine(), layout.uncertainByLine());
+        ExtractResponse response = parseLines(rawText, layout.lines(), layout.candidatesByLine(), layout.uncertainByLine());
+        return response.withItems(ReceiptEvidenceMapper.attach(response.items(), layout, lineAnalyzer));
     }
 
     private ExtractResponse parseLines(String rawText, List<String> lines,
@@ -143,12 +144,17 @@ public class ReceiptParserService {
         long startedAt = System.nanoTime();
         log.info("Iniciando parsing: líneas={}, caracteres={}, candidatosLayout={}",
                 lines.size(), rawText.length(), layoutCandidates.values().stream().mapToInt(List::size).sum());
-        String date = dateParser.extractNormalized(lines);
-        if (date.isBlank() && !rawText.isBlank()) {
-            date = dateParser.extractNormalized(rawText.lines().toList());
+        ReceiptDateParser.DateReading dateReading = dateParser.extractWithSource(lines);
+        if (dateReading.value().isBlank() && !rawText.isBlank()) {
+            dateReading = dateParser.extractWithSource(rawText.lines().toList());
         }
+        String date = dateReading.value();
         String storeName = storeNameMapper.resolve(lines, detectStoreName(lines));
         List<String> warnings = new ArrayList<>();
+        if (dateReading.inferredYear()) {
+            warnings.add("La fecha no indica año: se usó " + date.substring(date.lastIndexOf('/') + 1)
+                    + ". Confirmá el año si es una compra antigua.");
+        }
         if (date.isBlank() && lines.stream().anyMatch(line -> lineAnalyzer.normalize(line).contains("fecha"))) {
             warnings.add("No se pudo leer una fecha de compra válida. Confirmala en la imagen.");
         }
@@ -171,7 +177,7 @@ public class ReceiptParserService {
                     storeName, receiptDate, candidate.ambiguous(), candidate.sourceLine(), warnings)).collect(Collectors.toCollection(ArrayList::new));
             memoryLines = result.candidates().stream().map(PigmentoReceiptParser.Candidate::sourceLine).toList();
         } else if (pedidosYaParser.supports(lines)) {
-            PedidosYaReceiptParser.ParseResult result = pedidosYaParser.parse(lines);
+            PedidosYaReceiptParser.ParseResult result = pedidosYaParser.parse(lines, uncertainByLine);
             items = new ArrayList<>(extractPedidosYaItems(result, storeName, date, warnings));
             memoryLines = result.candidates().stream().map(PedidosYaReceiptParser.Candidate::sourceLine).toList();
         } else {
@@ -453,8 +459,9 @@ public class ReceiptParserService {
                 item.cantidad(),
                 item.precioUnitario(),
                 item.fecha(),
-                "LEARNED",
-                item.firma()
+                "AMBIGUOUS".equals(item.estado()) ? "AMBIGUOUS" : "LEARNED",
+                item.firma(),
+                true
         );
     }
 
@@ -583,7 +590,7 @@ public class ReceiptParserService {
     }
 
     private String beautifyDescription(String rawDescription) {
-        String cleaned = lineAnalyzer.clean(rawDescription)
+        String cleaned = ReceiptPresentationNormalizer.normalize(lineAnalyzer.clean(rawDescription))
                 .replace('*', ' ')
                 .replace('_', ' ')
                 .replace('.', ' ')

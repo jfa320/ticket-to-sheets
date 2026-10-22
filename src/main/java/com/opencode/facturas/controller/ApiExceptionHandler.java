@@ -1,6 +1,7 @@
 package com.opencode.facturas.controller;
 
 import com.opencode.facturas.service.ExtractionBusyException;
+import com.opencode.facturas.service.CorrectionConflictException;
 import com.opencode.facturas.service.ExtractionCancelledException;
 import com.opencode.facturas.service.OcrUnavailableException;
 import org.springframework.http.HttpStatus;
@@ -16,6 +17,7 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.util.Map;
 
@@ -46,7 +48,7 @@ public class ApiExceptionHandler {
         return ResponseEntity.badRequest().body(errorBody("La solicitud contiene datos inválidos."));
     }
 
-    @ExceptionHandler({IllegalArgumentException.class, MethodArgumentNotValidException.class,
+    @ExceptionHandler({IllegalArgumentException.class, MethodArgumentNotValidException.class, MethodArgumentTypeMismatchException.class,
             MaxUploadSizeExceededException.class})
     public ResponseEntity<Map<String, String>> handleBadRequest(Exception ex) {
         String message = ex instanceof MaxUploadSizeExceededException
@@ -63,6 +65,11 @@ public class ApiExceptionHandler {
     public ResponseEntity<Map<String, String>> handleBusy(ExtractionBusyException ex) {
         return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
                 .body(errorBody(ex.getMessage()));
+    }
+
+    @ExceptionHandler(CorrectionConflictException.class)
+    public ResponseEntity<Map<String, String>> handleCorrectionConflict(CorrectionConflictException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(errorBody(ex.getMessage()));
     }
 
     @ExceptionHandler(ExtractionCancelledException.class)

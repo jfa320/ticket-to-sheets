@@ -23,7 +23,7 @@ final class HistoryProductMatcher {
 
     ReceiptItem enrich(ReceiptItem item, List<String> warnings) {
         if (ReceiptProductRules.isAlmacen(item)) return ReceiptProductRules.almacen(item);
-        if ("LEARNED".equals(item.estado())) return item;
+        if (item.memorizado()) return item;
         String store = normalize(item.lugarDeCompra());
         if (unknownStore(store)) return item;
         // A generalized parser description can lose flavor/size: require the original OCR signature.

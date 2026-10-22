@@ -83,6 +83,21 @@ class OcrApiClientTest {
         verify(restTemplate, times(2)).getForEntity(HEALTH_URI, String.class);
     }
 
+    @Test void forwardsTheBudgetOnlyForTheCurrentExtraction() {
+        RestTemplate rest = mock(RestTemplate.class);
+        when(rest.getForEntity(HEALTH_URI, String.class)).thenReturn(ResponseEntity.ok("{\"ocrReady\":true}"));
+        when(rest.postForEntity(eq(OCR_URI), any(HttpEntity.class), eq(String.class))).thenReturn(ResponseEntity.ok("{}"));
+        var client = client(rest, 1, new ArrayList<>());
+        var image = new BufferedImage(1,1,BufferedImage.TYPE_INT_RGB);
+        client.recognize(image, new ExtractionTask(null, 40));
+        client.recognize(image);
+        @SuppressWarnings({"rawtypes", "unchecked"})
+        ArgumentCaptor<HttpEntity<byte[]>> requests = ArgumentCaptor.forClass((Class) HttpEntity.class);
+        verify(rest, times(2)).postForEntity(eq(OCR_URI), requests.capture(), eq(String.class));
+        assertThat(requests.getAllValues().get(0).getHeaders().getFirst("X-OCR-Search-Budget-Seconds")).isEqualTo("40");
+        assertThat(requests.getAllValues().get(1).getHeaders().getFirst("X-OCR-Search-Budget-Seconds")).isNull();
+    }
+
     @Test
     void reportsModelsPendingAfterExhaustingHealthRetries() {
         RestTemplate restTemplate = mock(RestTemplate.class);
