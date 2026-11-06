@@ -8,6 +8,7 @@ import com.opencode.facturas.service.ReceiptParserService;
 import org.springframework.http.MediaType;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -44,6 +45,7 @@ public class ReceiptController {
         log.info("Iniciando extracción: tipo={}, tamaño={} bytes", file.getContentType(), file.getSize());
         OcrResult ocrResult = searchBudgetSeconds != null ? ocrService.extract(file, extractionId, searchBudgetSeconds)
                 : extractionId == null ? ocrService.extract(file) : ocrService.extract(file, extractionId);
+        try {
         ExtractResponse response = parserService.parse(ocrResult)
                 .withOcrMetadata(ocrResult.variant(), ocrResult.score())
                 .withOcrReview(OcrReviewMapper.pages(ocrResult));
@@ -52,7 +54,16 @@ public class ReceiptController {
                 ocrResult.lines() == null ? 0 : ocrResult.lines().size(),
                 response.items() == null ? 0 : response.items().size(),
                 response.warnings() == null ? 0 : response.warnings().size());
+        ocrService.finishExtraction(extractionId, true);
         return response;
+        } catch (RuntimeException error) {
+            ocrService.finishExtraction(extractionId, false); throw error;
+        }
+    }
+
+    @GetMapping("/progress")
+    public com.opencode.facturas.model.ExtractionProgress progress(@RequestParam String extractionId) {
+        return ocrService.progress(extractionId);
     }
 
     @PostMapping("/cancel")

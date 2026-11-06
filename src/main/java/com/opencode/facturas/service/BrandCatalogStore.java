@@ -19,6 +19,7 @@ class BrandCatalogStore {
     }
 
     List<String> load() {
+        LearningRestoreTransaction.recover(objectMapper, catalogPath.toAbsolutePath().getParent());
         List<String> brands = AtomicJsonFile.loadOrRecover(
                 objectMapper,
                 catalogPath,
@@ -30,6 +31,7 @@ class BrandCatalogStore {
         }
         return brands == null ? List.of() : brands;
     }
+    Path path() { return catalogPath; }
 
     void save(Collection<String> brands) {
         try {

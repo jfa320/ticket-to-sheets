@@ -1,4 +1,4 @@
-param([string]$Python = '', [switch]$Docker)
+param([string]$Python = '', [switch]$Docker, [switch]$Browser)
 $ErrorActionPreference = 'Stop'
 $checkRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 . (Join-Path $PSScriptRoot 'python-runtime.ps1')
@@ -14,7 +14,7 @@ try {
             & $Command @Arguments
             if ($LASTEXITCODE -ne 0) { throw "Código de salida $LASTEXITCODE" }
             Write-Host "OK: $Name"
-        } catch { $failures.Add($Name); Write-Warning "FALLÓ $Name : $($_.Exception.Message)" }
+        } catch { $failures.Add($Name); Write-Warning "ERROR en $Name : $($_.Exception.Message)" }
     }
     Invoke-Check 'Java' 'mvn' @('test')
     $jsFiles = @(Get-ChildItem -LiteralPath src/test/js -Filter '*.test.mjs' | ForEach-Object { $_.FullName })
@@ -24,6 +24,14 @@ try {
     Invoke-Check 'Imports del contenedor OCR' $Python @('scripts/check_container_context.py')
     Invoke-Check 'Arranque local PowerShell' (Get-Process -Id $PID).Path @('-NoProfile', '-File', 'scripts/tests/local.tests.ps1')
     Invoke-Check 'Selección de Python' (Get-Process -Id $PID).Path @('-NoProfile', '-File', 'scripts/tests/python-runtime.tests.ps1')
+    if ($Browser) {
+        Invoke-Check 'Paquete para navegador' 'mvn' @('package', '-DskipTests')
+        $previousPython = $env:APP_PYTHON
+        try {
+            $env:APP_PYTHON = $Python
+            Invoke-Check 'Navegador E2E aislado' 'node' @('scripts/browser_e2e.mjs')
+        } finally { $env:APP_PYTHON = $previousPython }
+    } else { Write-Host 'Navegador: no solicitado. Agregá -Browser con Playwright y un navegador instalados.' }
     if ($Docker) {
         Invoke-Check 'Docker Compose' 'docker' @('compose', 'config', '--quiet')
         Invoke-Check 'Imágenes Docker' 'docker' @('compose', 'build')

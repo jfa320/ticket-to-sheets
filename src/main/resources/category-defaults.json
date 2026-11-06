@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "fallback": "Supermercado",
+  "categories": ["Supermercado", "Lácteos", "Almacén", "Limpieza", "Perfumeria", "Ferreteria", "Panaderia", "Farmacia", "Verduleria", "Otros"],
+  "stores": {
+    "Los Tres Corazones": "Supermercado",
+    "PedidosYa Market - San Miguel II": "Supermercado",
+    "Tienda Filipa": "Supermercado",
+    "Ferreteria Tribulato": "Ferreteria",
+    "Perfumerias Pigmento": "Perfumeria",
+    "Central de Sabores": "Panaderia",
+    "Estancia San Francisco": "Otros",
+    "Farmacias TKL San Miguel": "Farmacia",
+    "Tuti Fruti": "Verduleria"
+  },
+  "productRules": []
+}

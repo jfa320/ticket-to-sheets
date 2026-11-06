@@ -22,8 +22,8 @@
     "date": "12/8/2026",
     "total": "2050,00",
     "items": [
-      {"description": "Leche 1l", "quantity": "1", "unitPrice": "1200,00", "state": "AMBIGUOUS"},
-      {"description": "Galletitas", "quantity": "1", "unitPrice": "850,00", "state": "AMBIGUOUS"}
+      {"description": "Leche Entera 1l", "quantity": "1", "unitPrice": "1200,00", "state": "AMBIGUOUS"},
+      {"description": "Galletitas De Avena", "quantity": "1", "unitPrice": "850,00", "state": "AMBIGUOUS"}
     ]
   }
 }

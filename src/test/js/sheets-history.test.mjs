@@ -12,7 +12,7 @@ test('history API pins the destination and sends no receipts or credentials', as
         calls.push({url, options}); return {ok: true, json: async () => state()};
     });
     await api.getHistory();
-    await api.syncHistory({...destination, serviceAccountEmail: 'synthetic@invalid', items: [{private: true}]});
+    await api.syncHistory({...destination, oauthConfigured: true, items: [{private: true}]});
     await api.removeHistory();
     assert.deepEqual(calls.map(call => [call.url, call.options.method]), [
         ['/api/sheets/history', 'GET'], ['/api/sheets/history/sync', 'POST'], ['/api/sheets/history', 'DELETE']

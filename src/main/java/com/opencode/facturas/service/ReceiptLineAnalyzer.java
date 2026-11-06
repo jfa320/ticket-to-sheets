@@ -98,7 +98,8 @@ final class ReceiptLineAnalyzer {
 
     boolean isProductFooter(String normalized) {
         String compact = normalized.replace(" ", "");
-        return compact.startsWith("subtot") || compact.startsWith("total") || compact.startsWith("t0tal")
+        return normalized.matches("^articulos\\s*\\d.*")
+                || compact.startsWith("subtot") || compact.startsWith("total") || compact.startsWith("t0tal")
                 || compact.startsWith("tota1") || compact.startsWith("t0ta1") || compact.startsWith("totai")
                 || compact.startsWith("recibi") || compact.startsWith("apagar");
     }

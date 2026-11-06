@@ -95,7 +95,7 @@ class ReceiptParserServiceTest {
 
         assertEquals("26/9/2026", response.date());
         assertEquals(1, response.itemCount(), response.csv());
-        assertEquals("Leche", response.items().get(0).descripcion());
+        assertEquals("Leche Entera", response.items().get(0).descripcion());
         assertEquals("1200,00", response.total());
     }
 
@@ -278,7 +278,7 @@ class ReceiptParserServiceTest {
         assertEquals(19, response.itemCount());
         assertTrue(response.csv().contains("Queso cremoso 1un|Punta del agua|Los Tres Corazones"));
         assertTrue(response.csv().contains("Papel higienico 4 4un|Higienol|Los Tres Corazones"));
-        assertTrue(response.csv().contains("Jabon x3 3un|Lux|Los Tres Corazones"));
+        assertTrue(response.csv().contains("Jabon X3 3un|Lux|Los Tres Corazones"));
         assertTrue(response.csv().contains("505gr|La Providencia|Los Tres Corazones"));
         assertTrue(response.csv().contains("Pure de tomates 520gr|Molto|Los Tres Corazones"));
         assertTrue(response.csv().contains("Salchichas 230gr|Unión Ganadera|Los Tres Corazones"));
@@ -443,8 +443,8 @@ class ReceiptParserServiceTest {
 
         assertEquals("Tienda Filipa", response.storeName());
         assertEquals("13/6/2026", response.date());
-        assertTrue(response.csv().contains("Mix de semillas|Cumana|Tienda Filipa|Supermercado|1|2400,00|13/6/2026"), response.csv());
-        assertTrue(response.csv().contains("Sal x500gr|Nisin|Tienda Filipa|Supermercado|1|2800,00|13/6/2026"), response.csv());
+        assertTrue(response.csv().contains("Mix De Semillas De|Cumana|Tienda Filipa|Supermercado|1|2400,00|13/6/2026"), response.csv());
+        assertTrue(response.csv().contains("Sal X500gr|Nisin|Tienda Filipa|Supermercado|1|2800,00|13/6/2026"), response.csv());
         assertTrue(response.csv().contains("Pan multicereal|La Francia|Tienda Filipa|Supermercado|1|5800,00|13/6/2026"), response.csv());
     }
 
@@ -482,13 +482,13 @@ class ReceiptParserServiceTest {
         ExtractResponse response = parserService.parse(raw);
 
         assertEquals("PedidosYa Market - San Miguel II", response.storeName());
-        assertTrue(response.csv().contains("Cebolla|Genérico|PedidosYa Market - San Miguel II|Supermercado|0.9|888,91|"), response.csv());
-        assertTrue(response.csv().contains("Agua mineral 2|Sierra De Los Padres|PedidosYa Market - San Miguel II|Supermercado|1|1572,50|"), response.csv());
-        assertTrue(response.csv().contains("Papas 700|McCain|PedidosYa Market - San Miguel II|Supermercado|2|5735,40|"), response.csv());
-        assertTrue(response.csv().contains("Yogur 280|Tregar|PedidosYa Market - San Miguel II|Supermercado|1|3849,00|"), response.csv());
-        assertTrue(response.csv().contains("Harina 000 1|Morixe|PedidosYa Market - San Miguel II|Supermercado|1|999,00|"), response.csv());
-        assertTrue(response.csv().contains("Leche 3 1|Tregar|PedidosYa Market - San Miguel II|Supermercado|2|1552,85|"), response.csv());
-        assertTrue(response.csv().contains("Queso rallado 150|La Paulina|PedidosYa Market - San Miguel II|Supermercado|1|5082,15|"), response.csv());
+        assertTrue(response.csv().contains("Cebolla Selección|Genérico|PedidosYa Market - San Miguel II|Supermercado|0.9|888,91|"), response.csv());
+        assertTrue(response.csv().contains("Agua Mineral Sierra De Los Padres Sin Gas 2 L|Sierra De Los Padres|PedidosYa Market - San Miguel II|Supermercado|1|1572,50|"), response.csv());
+        assertTrue(response.csv().contains("Papas Air Fryer Mc Cain Más Finitas 700 G|McCain|PedidosYa Market - San Miguel II|Supermercado|2|5735,40|"), response.csv());
+        assertTrue(response.csv().contains("Yogur Tregar Natural Entero Sin Azúcar 280 G|Tregar|PedidosYa Market - San Miguel II|Supermercado|1|3849,00|"), response.csv());
+        assertTrue(response.csv().contains("Harina De Trigo Morixe 000 1 Kg|Morixe|PedidosYa Market - San Miguel II|Supermercado|1|999,00|"), response.csv());
+        assertTrue(response.csv().contains("Leche Tregar Entera 3% Larga Vida 1 L|Tregar|PedidosYa Market - San Miguel II|Supermercado|2|1552,85|"), response.csv());
+        assertTrue(response.csv().contains("Queso Rallado La Paulina Tradicional 150 G|La Paulina|PedidosYa Market - San Miguel II|Supermercado|1|5082,15|"), response.csv());
     }
 
     @Test
@@ -558,13 +558,13 @@ class ReceiptParserServiceTest {
 
         assertEquals("PedidosYa Market - San Miguel II", response.storeName());
         assertEquals(7, response.itemCount(), response.csv());
-        assertTrue(response.csv().contains("Cebolla|Genérico|PedidosYa Market - San Miguel II|Supermercado|0.9|888,91|"), response.csv());
-        assertTrue(response.csv().contains("Agua mineral 2|Sierra De Los Padres|PedidosYa Market - San Miguel II|Supermercado|1|1572,50|"), response.csv());
-        assertTrue(response.csv().contains("Papas 700|McCain|PedidosYa Market - San Miguel II|Supermercado|2|5735,40|"), response.csv());
-        assertTrue(response.csv().contains("Yogur 280|Tregar|PedidosYa Market - San Miguel II|Supermercado|1|3849,00|"), response.csv());
-        assertTrue(response.csv().contains("Harina 0001|Morixe|PedidosYa Market - San Miguel II|Supermercado|1|999,00|"), response.csv());
-        assertTrue(response.csv().contains("Leche 3 1|Tregar|PedidosYa Market - San Miguel II|Supermercado|2|1552,85|"), response.csv());
-        assertTrue(response.csv().contains("Queso rallado 150|La Paulina|PedidosYa Market - San Miguel II|Supermercado|1|5082,15|"), response.csv());
+        assertTrue(response.csv().contains("Cebolla Seleccion|Genérico|PedidosYa Market - San Miguel II|Supermercado|0.9|888,91|"), response.csv());
+        assertTrue(response.csv().contains("Agua Mineral Sierra De Los Padres Sin Gas 2 L|Sierra De Los Padres|PedidosYa Market - San Miguel II|Supermercado|1|1572,50|"), response.csv());
+        assertTrue(response.csv().contains("Papas Air Fryer Mc Cain Mas Finitas 700 G|McCain|PedidosYa Market - San Miguel II|Supermercado|2|5735,40|"), response.csv());
+        assertTrue(response.csv().contains("Yogur Tregar Natural Entero Sin Azücar 280 G|Tregar|PedidosYa Market - San Miguel II|Supermercado|1|3849,00|"), response.csv());
+        assertTrue(response.csv().contains("Harina De Trigo Morixe 0001 Kg|Morixe|PedidosYa Market - San Miguel II|Supermercado|1|999,00|"), response.csv());
+        assertTrue(response.csv().contains("Leche Tregar Entera 3% Larga Vida 1 L|Tregar|PedidosYa Market - San Miguel II|Supermercado|2|1552,85|"), response.csv());
+        assertTrue(response.csv().contains("Queso Rallado La Paulina Tradicional 150 G|La Paulina|PedidosYa Market - San Miguel II|Supermercado|1|5082,15|"), response.csv());
     }
 
     @Test

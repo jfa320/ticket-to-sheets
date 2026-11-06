@@ -10,8 +10,8 @@ public final class CorrectionManagement {
                                     String categoria, int veces, String ultimaVez, String version) { }
     public record Page(List<ManagedCorrection> entries, int total, int offset, int limit) { }
     public record Edit(@NotBlank @Size(max=1000) String store, @NotBlank @Size(max=1000) String firma,
-                       @NotBlank String version, @NotBlank @Size(max=1000) String descripcion,
-                       @NotBlank @Size(max=1000) String marca, @Size(max=1000) String categoria) { }
+                       @NotBlank String version, @Size(max=1000) String descripcion,
+                       @Size(max=1000) String marca, @Size(max=1000) String categoria) { }
     public record Remove(@NotBlank @Size(max=1000) String store, @NotBlank @Size(max=1000) String firma,
                          @NotBlank String version) { }
 }

@@ -37,8 +37,8 @@ class SheetsServiceTest {
         config = new SheetsConfigStore(mapper, directory.resolve("destination.json").toString());
         config.save(new ConfigRequest(ID, 2026, 2, Map.of("10", TAB)));
         destination = new Destination(ID, TAB, 2);
-        GoogleServiceAccountAuth auth = mock(GoogleServiceAccountAuth.class);
-        when(auth.status()).thenReturn(new GoogleServiceAccountAuth.CredentialStatus(false, "", "Falta credencial"));
+        GoogleOAuthService auth = mock(GoogleOAuthService.class);
+        when(auth.status()).thenReturn(new GoogleOAuthService.Status(false, false, "Falta conectar Google"));
         client = mock(GoogleSheetsClient.class);
         service = new SheetsService(mapper, config, auth, client);
         metadata = mapper.readTree("""
@@ -129,7 +129,7 @@ class SheetsServiceTest {
         when(client.findRequest(eq(ID), any())).thenReturn(mapper.valueToTree(Map.of("matchedDeveloperMetadata",
                 List.of(Map.of("developerMetadata", marker)))));
         clearInvocations(client);
-        SheetsService restarted = new SheetsService(mapper, config, mock(GoogleServiceAccountAuth.class), client);
+        SheetsService restarted = new SheetsService(mapper, config, mock(GoogleOAuthService.class), client);
         assertThat(restarted.append(request()).duplicate()).isTrue();
         verify(client, never()).batchUpdate(anyString(), any());
         verify(client, never()).metadata(anyString());
@@ -205,7 +205,7 @@ class SheetsServiceTest {
     }
 
     @Test void configurationStatusRemainsAvailableWithoutCredentialsOrGoogle() {
-        assertThat(service.getConfig().credentialsConfigured()).isFalse();
+        assertThat(service.getConfig().googleConnected()).isFalse();
         assertThat(service.getConfig().headerRow()).isEqualTo(2);
         verifyNoInteractions(client);
     }

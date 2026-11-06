@@ -21,6 +21,9 @@ public class CorrectionMemory {
 
     private final CorrectionMemoryStore store;
     private final List<Entry> entries = new ArrayList<>();
+    synchronized List<Entry> snapshot() { return List.copyOf(entries); }
+    synchronized void applySnapshot(List<Entry> values) { entries.clear(); entries.addAll(values); }
+    Path path() { return store.path(); }
 
     @Autowired
     public CorrectionMemory(ObjectMapper objectMapper) {
@@ -50,12 +53,15 @@ public class CorrectionMemory {
 
     public synchronized ManagedCorrection replace(Edit edit) {
         int index = managementIndex(edit.store(), edit.firma(), edit.version());
-        String description = managementText(edit.descripcion(), true);
-        String brand = managementText(edit.marca(), true);
+        String description = managementText(edit.descripcion(), false);
+        String brand = managementText(edit.marca(), false);
+        String category = managementText(edit.categoria(), false);
+        if (description.isBlank() && brand.isBlank() && category.isBlank())
+            throw new IllegalArgumentException("Completá al menos una corrección de descripción, marca o categoría.");
         if (CorrectionMemoryRules.normalize(brand).equals("generico")) brand = "Genérico";
         Entry previous = entries.get(index);
         Entry updated = new Entry(previous.store(), previous.firma(), description, brand,
-                managementText(edit.categoria(), false), previous.veces() + 1, LocalDate.now().toString());
+                category, previous.veces() + 1, LocalDate.now().toString());
         List<Entry> next = new ArrayList<>(entries);
         next.set(index, updated);
         store.save(next);

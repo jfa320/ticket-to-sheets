@@ -1,5 +1,37 @@
 # PROJECT_CONTEXT
 
+## Rendimiento y protección de cambios — 29/10/2026
+
+- El presupuesto por defecto del backend es 8 segundos (`app.ocr.search-budget-seconds` / `APP_OCR_SEARCH_BUDGET_SECONDS`). `X-OCR-Search-Budget-Seconds` entre 5 y 10 selecciona `run_fast_ocr`; de 11 a 180 conserva `run_best_ocr`. El frontend ofrece Rápida (8) y Detallada (90) y muestra el tiempo observado. El presupuesto global de PDF sigue vigente y no se reinicia por página.
+- `fast_reading.py` acota la imagen, conserva el encuadre completo y evita las sondas y múltiples variantes de una lectura normal. En tickets largos aplica límites de lado corto/píxeles y usa el procesamiento por bloques existente. Intenta orientaciones adicionales solo ante una lectura sin texto útil y con margen estimado. Solo inicia una relectura selectiva si quedan al menos cuatro segundos para sus dos comprobaciones; no inicia otra llamada si su costo estimado no cabe. Los importes no confirmados conservan `reviewRequired`, además de su confianza. Es cooperativo: no interrumpe una inferencia nativa en curso.
+- `get_ocr` configura `OCR_CPU_THREADS` (por defecto hasta 4) y `OCR_ENABLE_MKLDNN` (true); precalienta detección/reconocimiento con texto ficticio antes de publicar el motor en `OCR_CACHE`. El healthcheck no anuncia disponibilidad antes de terminar. Si falla la carga o el calentamiento optimizado se usa el motor compatible, sin purgar modelos por esa incompatibilidad.
+- En modo rápido, `OcrService` valida dimensiones/contenido de JPEG y usa `OcrApiClient.recognizeEncodedJpeg`, conservando los bytes originales y EXIF. Python corrige la orientación antes del OCR. Se evita una conversión completa a PNG; PDFs rasterizados y otras imágenes siguen usando PNG.
+- `BrandCatalogMatcher` deduplica y normaliza alias al cargar el catálogo y reutiliza patrones compilados. `remember` y la restauración invalidan el índice después de persistir; las mismas regresiones conservan el comportamiento de marcas y ambigüedades.
+- `GET /api/learning/limits` devuelve `{maxFileBytes:16000000,maxEntries:10000}`. La exportación valida esquema, cantidad y tamaño; el frontend utiliza la política del servidor y comprueba el Blob final. La importación admite el documento más un margen para los hashes del envoltorio de restauración. Se rechazan versiones que desborden int y caracteres de control multilínea. Los movimientos atómicos JSON reintentan hasta tres veces ante un bloqueo transitorio de Windows, sin borrar el destino.
+- `correction-manager.mjs` protege formularios modificados antes de buscar/paginar/eliminar/cerrar, incluidos Escape y recarga. El aviso permite guardar los formularios pendientes, descartar o continuar editando. Una falla de guardado conserva los cambios y no ejecuta la navegación pendiente. `CorrectionManagement.Edit` admite campos parciales: un campo vacío no impone una corrección sobre el ticket; dejar los tres vacíos se rechaza sin borrar la entrada.
+- `request-timeout.mjs` limita la espera de cancelación/recuperación (8 s) y de progreso (5 s), incluido un cuerpo de respuesta bloqueado. Un timeout conserva el UUID pendiente; no se reenvía automáticamente la extracción.
+- `scripts/benchmark_local.py` crea backend y OCR reales aislados en 127.0.0.1:18083/18084, evalúa referencias congeladas y guarda latencia/precisión en una carpeta privada de logs. Falla si un caso no responde correctamente o tarda 10 s o más. Los hashes de casos permiten comparar únicamente referencias idénticas.
+
+## Revisión, progreso y aprendizaje portable — 29/10/2026
+
+- `BrandCatalogMatcher` busca marcas conocidas también dentro de descripciones que empiezan por un producto genérico. Exige palabras completas y admite letras separadas por el OCR. El parser conserva los atributos y los importes; los nombres dudosos mantienen su revisión.
+- `PdfPreviewRenderer` genera una vista JPEG acotada de páginas con texto nativo sin invocar OCR: máximo 2 MP y 900 KB. Usa el marco de coordenadas de `PDFTextStripper`, incluido crop box y rotaciones, para que las fuentes de una fila abran el recorte correcto. La página sigue identificada como `pdf-text`.
+- `GET /api/receipts/progress?extractionId=...` devuelve `ExtractionProgress`: `{status,phase,pageNumber,pageCount,elapsedMillis}`. `ExtractionTask` actualiza fases/páginas durante OCR y parsing. El estado terminal vive solo en memoria, hasta cinco minutos y 128 trabajos, sin productos, OCR ni nombres de archivos. Un ID aún no iniciado devuelve `WAITING/UPLOADING`. El frontend consulta cada 750 ms mientras procesa y detiene la consulta al terminar o cancelar.
+- **Cancelar extracción** confirma la cancelación del UUID, aborta la petición y conserva la tabla anterior. Si la confirmación falla, retiene el UUID y permite reintentar. Los chequeos de cancelación también evitan publicar un resultado que terminó mientras se solicitaba cancelar.
+- `LearningBackupController` ofrece `GET /api/learning/backup`, `POST /api/learning/preview` y `POST /api/learning/restore`. El documento `{format:"ProyectoFacturas-learning",schemaVersion:1,corrections,brands}` contiene solo aprendizaje. La vista previa valida el esquema y devuelve conteos, muestra de hasta tres entradas y hashes `expectedVersion`/`backupHash`. La restauración recibe `{backup,expectedVersion,backupHash}`, exige la misma memoria/documento revisados (409 si cambiaron), agrega entradas nuevas y conserva las locales ante conflictos.
+- `LearningRestoreTransaction` usa un diario `.learning-restore.json` y reemplazos atómicos de `corrections.json`/`brands.json`. Actualiza la memoria viva después de ambas escrituras; ante un fallo revierte los archivos. Si el proceso termina antes de confirmar, los stores recuperan el estado anterior al arrancar. El diario y los respaldos contienen aprendizaje y quedan fuera de Git. La exportación omite credenciales y configuración de Sheets.
+- `CategoryService` carga `category-defaults.json` y el archivo opcional `data/categories.json` (`APP_CATEGORIES_PATH`). El JSON versionado define `fallback`, sugerencias `categories`, asociaciones `stores` y `productRules:[{store?,category,keywords}]`. Las reglas usan palabras/frases completas normalizadas, en orden, y prevalecen sobre la categoría del comercio; memoria e historial conservan su prioridad. Los cambios válidos se recargan al extraer; un archivo inválido falla con mensaje. `GET /api/categories` entrega sugerencias para un `datalist`, sin limitar el texto libre de la tabla.
+- `scripts/browser_e2e.mjs` ejecuta el flujo real en navegador, con backend y datos ficticios aislados. `scripts/check.ps1 -Browser` lo incorpora como validación opcional. Ver `docs/BROWSER_TESTING.md`.
+
+## Mejoras de precisión y límites — 28/10/2026
+
+- `ReceiptParserService` expande únicamente prefijos completos o abreviaturas delimitadas y conserva su sufijo. Ya no clasifica `salsa` como `sal`, ni `papel aluminio` como `papel higienico`, ni elimina atributos como `integral`, sabores o unidades separadas. El alias legado de papel sin tipo requiere marca Higienol y presentación numérica. Las firmas OCR originales se conservan para el aprendizaje.
+- El parser genérico propaga la incertidumbre de cantidades anteriores, descripciones y precios posteriores. `ReceiptLayoutReader` incorpora la confianza del multiplicador consumido. Recuperar memoria mantiene `memorizado=true` y `AMBIGUOUS` ante evidencia dudosa o precio ausente; busca el precio por índice de aparición y nunca lo toma de otro producto o del resumen.
+- `ReceiptAmounts.decimal` y `ReceiptTotalCalculator` operan con `BigDecimal`. `receipt-decimal.mjs` usa enteros `BigInt` con escala decimal; convierte a `Number` solo para presentar los resultados. Ambos suman productos sin redondear por fila, redondean subtotal y bonificaciones a dos decimales con `HALF_UP` y luego calculan el neto. Los casos compartidos viven en `src/test/resources/money-cases.json`.
+- `app.pdf.processing-budget-seconds` / `APP_PDF_PROCESSING_BUDGET_SECONDS` define un presupuesto cooperativo total de 300 segundos por PDF (1–3600). `ExtractionTask` usa reloj monótono y el renderizador comprueba el límite antes de cada página. `OcrApiClient` envía `X-OCR-Document-Remaining-Seconds`; Python lo valida, cuenta la espera y lo comprueba entre llamadas nativas aun con búsqueda adaptativa desactivada. Conserva el presupuesto por página configurado. Al agotarse, `POST /api/receipts/extract` responde **408**, con mensaje y `requestId`, sin productos parciales y liberando la extracción activa. Una llamada nativa en curso puede exceder el límite antes de devolver el control.
+- Los logs de nivel normal ya no incluyen texto OCR, comercio, fecha ni importe de compra. Las respuestas de error del OCR tampoco se interpolan en los logs ni se reenvían completas al navegador; el diagnóstico detallado requiere debug explícito.
+- `ocr/synthetic_corpus.py --challenge` genera ocho casos de calibración y ocho reservados con productos distintos y referencias previas al OCR. Incluye atributos, pesos, repeticiones, rotación, inclinación, bajo contraste y desenfoque. No representa fotos reales ni valida marcas o comercios. Las imágenes y transcripciones generadas permanecen en `test-data/`, ignorado.
+
 ## Actualización de confiabilidad — 22/10/2026
 
 - `ReceiptItem.fuentesOcr` agrega referencias `{pageNumber,detectionIndices}` a las detecciones originales. `ReceiptEvidenceMapper` usa firmas exactas y conserva el orden de productos repetidos. No inventa coordenadas para texto sin cajas. La UI permite ver el recorte, filtrar ambiguas pendientes y marcar revisión local; ese indicador no se exporta ni entrena la memoria.
@@ -38,7 +70,7 @@ El proyecto está orientado a uso personal/local. No hay despliegue multiusuario
 - PaddleOCR 2.8.1 y PaddlePaddle 2.6.2.
 - Pillow 10.4.0, NumPy 1.26.4 y OpenCV 4.10.0.84.
 - Docker Compose para levantar backend y OCR.
-- Java HttpClient y firma RSA estándar para Google Sheets API y OAuth de cuenta de servicio, sin SDK ni nuevas dependencias.
+- Java HttpClient para Google Sheets API y OAuth de usuario con código de autorización, PKCE S256 y Google Picker, sin SDK ni nuevas dependencias.
 
 No hay `package.json`; no hay build frontend npm.
 
@@ -63,10 +95,12 @@ No hay `package.json`; no hay build frontend npm.
 - En filas reconstruidas desde detecciones, el parser también marca como ambiguas las que tienen alguna confianza OCR menor a `0.65` o una caja individual con una relación ancho/alto de `28` o más. La confianza ausente se trata como desconocida.
 - `ExtractResponse.warnings` informa lineas dudosas descartadas, por ejemplo precios sin descripcion.
 - La UI estatica renderiza una tabla editable, permite corregir o eliminar filas y resalta resultados ambiguos.
+- Un evento `paste` con una imagen en `clipboardData.items` o `clipboardData.files` selecciona el archivo, reutilizando validación y vista previa como la carga habitual. La extracción solo comienza al presionar `Extraer datos`, con guardado previo de correcciones y conservación del ticket anterior ante fallos. Ignora pegados en campos editables/diálogos y mientras hay una extracción o carga a Sheets; no solicita acceso adicional al portapapeles.
 - La UI muestra el texto completo de las advertencias antes de copiar las salidas.
+- `ReceiptLayoutReader` ordena las filas por su centro vertical, evitando que una detección alta del envase adelante la fila del precio al nombre del producto en capturas de PedidosYa. Conserva las referencias OCR y la ambigüedad de las detecciones consumidas.
 - El panel de revisión OCR resalta zonas con confianza menor a 0,80 o desconocida, permite mostrar todas, seleccionar con mouse/teclado y ampliar recortes a 2×/4×/8×. Conserva cada página y sus coordenadas por separado.
 - `app.js` regenera CSV/TSV desde las filas editadas; los botones de copia no dependen de la exportacion inicial del backend.
-- `receipt-sheets.mjs` gestiona el engranaje de configuración, propone el destino a partir de las fechas de las filas seleccionadas y envía las siete columnas editadas. Usa un UUID por operación, conserva el mismo UUID en reintentos y bloquea el mismo snapshot después del éxito. No envía texto OCR ni firma de aprendizaje a Google.
+- `google-connection.mjs` abre el popup OAuth y valida origen/source del mensaje; carga Google Picker bajo demanda y filtra planillas nativas. Cierra temporalmente el diálogo modal local para permitir interactuar con el selector y restaura el foco al terminar. `receipt-sheets.mjs` gestiona conectar/desconectar Google, elegir archivo y el engranaje de configuración, propone el destino a partir de las fechas de las filas seleccionadas y envía las siete columnas editadas. Usa un UUID por operación, conserva el mismo UUID en reintentos y bloquea el mismo snapshot después del éxito. No envía texto OCR ni firma de aprendizaje a Google.
 - El parser usa geometria OCR cuando hay detecciones con bounding boxes: reconstruye filas por pagina y puede leer columnas de descripcion, cantidad, precio unitario e importe antes de caer al parser textual.
 - PedidosYa tolera errores OCR frecuentes en el encabezado (`PodidosYa`) y descarta bloques de interfaz como `Tu pedido`, `Tu pago`, descuentos y detalles de entrega.
 - Se agrego una regresion OCR reproducible en `test-data/receipts/pedidosya/pedidosya-market-san-miguel-ii-ocr.txt`; la imagen original del caso no estaba disponible como archivo en el workspace.
@@ -82,7 +116,7 @@ Arquitectura simple de dos servicios locales:
 - Frontend estatico: `index.html`, `styles.css`, `app.js`. Permite elegir archivo, invoca endpoint REST y muestra/copia resultados.
 - Backend Spring Boot: recibe multipart, procesa imagen/PDF, llama al OCR, conserva resultado OCR estructurado, parsea layout/texto y devuelve JSON.
 - Microservicio OCR Python: recibe una imagen PNG, ejecuta PaddleOCR sobre variantes preprocesadas y responde texto, lineas, detecciones, variante seleccionada y score estructural.
-- Integración opcional Backend -> Google Sheets: cuenta de servicio compartida como Editor, destino persistido localmente y carga de filas A:H con números, fecha y fórmula de total. No requiere Google Drive API para un archivo identificado por URL/ID.
+- Integración opcional Backend -> Google Sheets: OAuth de usuario con permiso `drive.file` y selección mediante Google Picker; destino persistido localmente y carga de filas A:H con números, fecha y fórmula de total. La cuenta de Google debe poder editar el archivo.
 - Después de elegir la variante, `variant_fusion.py` combina lecturas compatibles ya disponibles; luego se ejecuta la relectura selectiva. `preview.py` genera en memoria una vista previa de la imagen ganadora para revisar las detecciones finales.
 
 Responsabilidades por capa:
@@ -211,13 +245,11 @@ No hay entidades JPA ni agregados persistidos.
 - `POST /api/receipts/extract`.
 - Consume: `multipart/form-data` con parametro `file` obligatorio.
 - Produce: JSON serializado desde `ExtractResponse`.
-- Flujo: valida que el archivo no este vacio, llama `OcrService.extract(file)`, luego `ReceiptParserService.parse(ocrResult)` para conservar texto y geometria, y agrega `variant`/`score` y las páginas de revisión mediante `OcrReviewMapper`.
+- Flujo: valida el archivo, llama `OcrService.extract(file, extractionId)`, luego `ReceiptParserService.parse(ocrResult)` para conservar texto y geometría, agrega `variant`/`score` y páginas mediante `OcrReviewMapper`, y confirma el estado final de la extracción.
 
 Manejo de errores:
 
-- `ApiExceptionHandler` captura `IllegalArgumentException`, `IllegalStateException` y `MethodArgumentNotValidException`.
-- Responde HTTP 400 con cuerpo `{ "message": "..." }`.
-- Inferencia: errores de OCR/integracion se exponen como 400 aunque algunos podrian considerarse 502/503 en una arquitectura remota.
+- `ApiExceptionHandler` devuelve `{message,requestId}` y distingue validación (400), rutas (404), método/formato (405/415), cancelación o conflicto de versión (409), presupuesto agotado (408), extracción ocupada (429), OCR no disponible (503), fallos de procesamiento (502) y errores inesperados (500).
 
 Endpoints del microservicio OCR Python:
 
@@ -230,11 +262,19 @@ Endpoint de aprendizaje:
 
 Endpoints de Google Sheets (`SheetsController`):
 
-- `GET /api/sheets/config`: devuelve archivo, año, fila de encabezados, asociaciones mensuales, versión de configuración, estado de credenciales y email público de la cuenta de servicio. No llama a Google ni devuelve claves o tokens.
+- `GET /api/sheets/config`: devuelve archivo, año, fila de encabezados, asociaciones mensuales, versión de configuración, `googleConnected`, `oauthConfigured` y mensaje de conexión. No llama a Google ni devuelve claves o tokens.
 - `PUT /api/sheets/config`: recibe `{ spreadsheetUrlOrId, year, headerRow, monthSheets }` y guarda URL/ID validado y asociaciones de meses a pestañas exactas en `data/sheets-config.json`.
 - `POST /api/sheets/check`: lee metadatos y A:I de las pestañas; devuelve las compatibles, las incompatibles y sugerencias por nombres mensuales inequívocos.
 - `POST /api/sheets/append`: recibe `{ requestId, items, destination: { spreadsheetId, sheetName, headerRow }, configVersion }`. Valida todas las filas y verifica que el destino y la versión coincidan con la configuración antes de llamar a Google. Responde `{ spreadsheetUrl, sheetName, updatedRange, appendedRows, duplicate }`.
 - `POST /api/sheets/status`: recibe `{requestId,destination}`, comprueba el destino configurado y consulta el marcador del UUID. Responde `{committed,result}` sin escribir ni recibir productos; `result` es la confirmación anterior o `null` si no hay marcador.
+
+OAuth (`GoogleOAuthController`):
+
+- `POST /api/sheets/oauth/connect`: inicia la autorización; devuelve URL fija de Google y cookie de intento (10 minutos).
+- `GET /api/sheets/oauth/callback`: valida state y cookie, canjea el código una vez y comunica solo éxito/error a la ventana original. Respuesta sin caché y con CSP y Referrer-Policy.
+- `POST /api/sheets/oauth/picker`: entrega temporalmente access token, clave pública de Picker y número de proyecto.
+- `POST /api/sheets/oauth/disconnect`: borra conexión e intentos OAuth y solicita revocación. No elimina los intentos de cargas ni el historial.
+- Los POST OAuth requieren JSON y Origin igual al callback local configurado; no habilitan CORS.
 
 Catálogo histórico (`SheetsHistoryController`):
 
@@ -251,7 +291,7 @@ El esquema esperado es el del Excel de compras: encabezados A:I con las siete co
 ## Services principales
 
 - `SheetsConfigStore`: valida la URL/ID y guarda el destino opcional con `AtomicJsonFile`. La configuración se lee de forma diferida para no impedir iniciar el OCR local si ese archivo está dañado.
-- `GoogleServiceAccountAuth`: lee el JSON local de la cuenta, firma un JWT RS256 con audiencia fija de Google y obtiene un token con scope `spreadsheets`; conserva el token en memoria y detecta cambios del archivo de credenciales.
+- `GoogleOAuthService`: OAuth de usuario con scope `drive.file`, state aleatorio de un solo uso ligado a cookie HttpOnly SameSite=Lax, PKCE S256 y acceso offline. Conserva el access token en memoria y el refresh token asociado al Client ID en `data/google-oauth-tokens.json`, con reemplazo atómico sin respaldo. Renueva tokens y elimina la autorización local si Google devuelve `invalid_grant`. Desconectar borra la conexión y los intentos OAuth y solicita revocación.
 - `GoogleSheetsClient` y `SheetsHttpTransport`: envían HTTPS solo a endpoints de Google, acotan timeouts, sanitizan errores y no reintentan automáticamente escrituras sin confirmar.
 - `SheetsService`: valida fecha/importes, inspecciona esquema y destino libre, protege rangos combinados/protegidos, amplía la cuadrícula y tabla/filtro A:I si hace falta, y escribe filas junto con un marcador UUID/huella mediante un batch atómico. Los marcadores remotos permiten reconocer reintentos incluso tras reiniciar el backend; no guardan compras en archivos locales.
 
@@ -268,6 +308,8 @@ El esquema esperado es el del Excel de compras: encabezados A:I con las siete co
 - `CorrectionMemoryStore`: serializa y carga `data/corrections.json` sin mezclar persistencia con las reglas de dominio.
 - `ReceiptParserService`: fachada del parsing OCR. Orquesta comercio, items, marcas, memoria y exportaciones sin exponer los colaboradores internos.
 - `ReceiptLayoutReader`: reconstruye filas desde `OcrDetection` por pagina, detecta candidatos tabulares con cantidad/precio unitario/importe y evita mezclar coordenadas iguales de paginas distintas.
+- `ReceiptProductBlockReader`: reconoce la familia estructural código/importes → descripción sin depender del comercio. Reúne hasta tres filas numéricas previas a la descripción y una alícuota parentizada posterior; usa `ReceiptAmounts` para leer los números y valida cantidad × unitario contra importe con tolerancia de cinco centavos. Separa códigos EAN de 8/13 dígitos pegados al multiplicador; los multiplicadores genéricos se limitan a cuatro dígitos enteros. Si falla el decimal del unitario pero queda un importe final legible, conserva ese importe y marca revisión. `ReceiptLayoutReader` lo usa por página y también en el camino de texto sin geometría, conserva las fuentes de todas las filas consumidas y propaga su incertidumbre. Las firmas usan la descripción sin código ni alícuota, para mantener el aprendizaje independiente del precio y de la cantidad.
+- Los bloques sin precio producen una fila `AMBIGUOUS` con precio vacío; los importes sin descripción y las posibles descripciones sin precio generan warnings de extracción parcial. Las inconsistencias conservan el importe de línea y requieren revisión aunque coincida el total impreso. `Artículos` seguido de un contador termina el listado. `ReceiptProductBlockTest` cubre texto anonimizado, repeticiones, importes internacionales, multiplicadores, alícuotas, bloques incompletos, memoria, evidencia OCR y separación entre páginas.
 - `ReceiptLineAnalyzer`: concentra normalizacion OCR, deteccion de metadata/resumen, clasificacion de lineas y extraccion de valores monetarios.
 - `ReceiptDateParser`: extrae y normaliza fechas de ticket; acepta un `Clock` para probar de forma determinista fechas sin anio.
 - `ReceiptAmounts` y `ReceiptTotalCalculator`: parsean/formatean importes `es-AR` y calculan el total desde los items reconocidos. El formateador se crea por llamada para evitar estado compartido entre requests.
@@ -312,7 +354,7 @@ Frontend externo:
 
 - `index.html` carga Google Fonts desde `fonts.googleapis.com`/`fonts.gstatic.com`.
 
-La carga opcional conecta el backend local con `oauth2.googleapis.com/token` y `sheets.googleapis.com/v4/spreadsheets`. El navegador solo llama a la API local. El archivo debe estar compartido con el email de la cuenta de servicio como Editor. La autorización del conector de Drive de un chat no se reutiliza como credencial de esta aplicación. Ver `docs/GOOGLE_SHEETS.md` para el alta y las fuentes oficiales.
+La carga opcional conecta el backend local con `oauth2.googleapis.com/token`, `/revoke` y `sheets.googleapis.com/v4/spreadsheets`. El navegador carga `apis.google.com/js/api.js` solo al elegir un archivo. El selector oficial recibe un access token temporal desde un POST local protegido por Origin; el refresh token y el secreto OAuth nunca se envían al navegador ni se guardan en su almacenamiento. La autorización del conector de Drive de un chat es independiente. Ver `docs/GOOGLE_SHEETS.md` para el alta y las fuentes oficiales.
 
 ## Configuracion de base de datos y migraciones
 
@@ -333,9 +375,9 @@ Configuracion relevante:
 - `app.ocr.connect-timeout-ms=5000`.
 - `app.ocr.read-timeout-ms=300000`.
 - `app.ocr.max-attempts=3`; si OCR no está disponible, el backend informa el error en pocos segundos.
-- `app.sheets.credentials-path=data/google-service-account.json`, `app.sheets.config-path=data/sheets-config.json`, `app.sheets.history-path=data/sheets-history.json` y `app.sheets.timeout-ms=15000`. Variables equivalentes `APP_SHEETS_*`; en Compose se usa `/app/data/` por el volumen existente. Claves, configuración personal, catálogo histórico y `secrets/` están ignorados por Git y excluidos del contexto Docker.
+- `app.google.client-id`, `client-secret`, `picker-api-key`, `app-id`, `redirect-uri` y `tokens-path` se configuran con `APP_GOOGLE_*`; el callback predeterminado es `http://localhost:8080/api/sheets/oauth/callback` y el archivo de tokens `data/google-oauth-tokens.json`. Se conservan `app.sheets.config-path`, `history-path`, `local-history-path` y `timeout-ms`. Compose monta datos en `/app/data/`; `.env` y los datos privados están fuera de Git y del build Docker. Ya no se usa `APP_SHEETS_CREDENTIALS_PATH`.
 
-## Cancelación al recargar la página
+## Cancelación explícita y al recargar la página
 
 La extracción admite el encabezado opcional `X-Extraction-Id`, generado por el navegador para cada archivo. `POST /api/receipts/cancel?extractionId=...` cancela únicamente ese trabajo y comunica la cancelación al OCR mediante `POST /ocr/cancel?extractionId=...`. Ambos servicios recuerdan por hasta diez minutos (máximo 256 identificadores) las cancelaciones que llegan antes de la subida. Una extracción cancelada responde HTTP 409 y no se envía al parser. Las extracciones activas sin cancelar siguen rechazando solapamientos con HTTP 429.
 
@@ -417,7 +459,7 @@ No hay framework frontend, router, bundler ni servicios separados.
 - `ocr/evaluate.py` ejecuta un manifest explícito de imágenes/PDF y transcripciones locales a través de `POST /api/receipts/extract`. Evalúa `rawText`, registra variante/score si están disponibles y compara informes solo para casos con el mismo ID y hash de archivo/transcripción/importes. Los informes contienen métricas, no transcripciones. Ver `docs/OCR_EVALUATION.md`; los datos y resultados pertenecen a `test-data/`, ignorado por Git.
 - `OcrReviewTest` comprueba el mapeo de vistas previas, las respuestas antiguas sin imagen y la separación de páginas. Las pruebas Python de fusión cubren escalas, marcos incompatibles, consenso, importes contradictorios y cajas divididas/repetidas. Las de vista previa verifican presupuesto y coordenadas.
 - `src/test/js/ocr-review.test.mjs` verifica la normalización de páginas y las coordenadas de recortes cuando el JPEG está reducido. Se ejecuta con `node --test src/test/js/ocr-review.test.mjs`, sin npm ni dependencias adicionales. No hay integración automatizada con modelos OCR reales.
-- `SheetsServiceTest`, `SheetsConfigStoreTest`, `GoogleServiceAccountAuthTest` y `GoogleSheetsClientTest` verifican schema, persistencia local, números/fechas, textos literales, slots con fórmulas preparadas, comentarios, rangos protegidos, UUID atómico, JWT, tokens y errores con Google simulado. `receipt-sheets.test.mjs` verifica selección, ediciones, destino, doble clic, reintentos y respuesta de la API. Ejecutar `node --test src/test/js/*.test.mjs` sin npm. La comprobación real de permisos y la escritura remota requieren credenciales del usuario y un archivo compartido.
+- `SheetsServiceTest`, `SheetsConfigStoreTest`, `GoogleOAuthServiceTest` y `GoogleOAuthControllerTest` y `GoogleSheetsClientTest` verifican schema, persistencia local, números/fechas, textos literales, slots con fórmulas preparadas, comentarios, rangos protegidos, UUID atómico, state/cookie/PKCE, origen, permisos, renovación, revocación y errores con Google simulado. `receipt-sheets.test.mjs` verifica selección, ediciones, destino, doble clic, reintentos y respuesta de la API. Ejecutar `node --test src/test/js/*.test.mjs` sin npm. La comprobación real requiere un cliente OAuth configurado, autorización del usuario y una planilla elegida con Google Picker. `google-connection.test.mjs` cubre popup, origen y source, cancelación, errores y selección de archivos nativos.
 
 Comando:
 
@@ -445,6 +487,10 @@ docker compose down
 
 Compose comprueba `GET /health` del servicio OCR hasta que `ocrReady=true`; el contenedor `app` espera a que `paddleocr` quede saludable antes de iniciar. La app se publica solo en `127.0.0.1:8080`. Dentro de los contenedores, `SERVER_ADDRESS=0.0.0.0` y `OCR_BIND_HOST=0.0.0.0` permiten la comunicación de la red Docker; en ejecución nativa ambos servicios escuchan en `127.0.0.1` por defecto.
 
+La ejecución nativa puede habilitar acceso desde la red local con `SERVER_ADDRESS=0.0.0.0`, manteniendo el OCR en loopback. El frontend usa `browser-crypto.mjs` para generar UUID v4 con `getRandomValues` cuando `randomUUID` no está disponible por HTTP. La huella del diario de Sheets conserva el mismo SHA-256 con una implementación local cuando falta `crypto.subtle`; solo se persisten UUID, destino y huella, sin productos ni OCR.
+
+Los botones de copia delegan en `receipt-clipboard.mjs`: prefieren `navigator.clipboard.writeText` y, cuando falta o se rechaza, intentan `document.execCommand('copy')` con un textarea temporal seleccionado durante el clic. Se conserva el formato TSV, se retira el textarea y se restaura el foco y la selección. Solo se confirma la copia y se actualiza el aviso de salida de página si la operación tiene éxito.
+
 El OCR tiene un bloqueo de procesamiento independiente del bloqueo de carga de modelos. `POST /ocr` devuelve 503 durante la preparación inicial y 429 cuando otra imagen está en curso; el bloqueo se libera también ante fallos. `GET /health` sigue respondiendo HTTP 200 durante una extracción y agrega `ocrBusy`, manteniendo `ocrReady` para indicar la carga de modelos.
 
 Desarrollo local mixto, segun README:
@@ -461,7 +507,7 @@ npm:
 ## Convenciones o patrones particulares detectados
 
 - Uso de Java records para DTOs simples.
-- El arranque local Windows en `scripts/local.ps1` espera los modelos OCR y ejecuta snapshots del JAR en `logs/runtime/`. Los accesos del escritorio pueden delegar en este script con `Start`/`Stop`. Evita recompilar un archivo en uso y valida los procesos antes de detenerlos. Reutiliza el PID de un OCR que todavía está importando dependencias y detecta salidas tempranas de los procesos recién lanzados. Descarta un registro PID obsoleto si Windows asignó ese número a otro programa, pero rechaza un puerto ocupado por un proceso ajeno. La espera de modelos tiene un límite real de 300 segundos, configurable con `-OcrStartupTimeoutSec`. `scripts/tests/local.tests.ps1` comprueba estos casos con procesos simulados. El entorno Java 17 usa su fallback TCP de loopback para evitar errores de sockets internos de Windows.
+- El arranque local Windows en `scripts/local.ps1` espera los modelos OCR y ejecuta snapshots del JAR en `logs/runtime/`. Los accesos del escritorio pueden delegar en este script con `Start`/`Stop` y `-OpenBrowser`. Evita recompilar un archivo en uso y valida los procesos antes de detenerlos. Reutiliza el PID de un OCR que todavía está importando dependencias y detecta salidas tempranas de los procesos recién lanzados. Descarta un registro PID obsoleto si Windows asignó ese número a otro programa. El arranque usa 8080 por defecto, independientemente del puerto de una ejecución anterior; `-Port` permite elegir otro explícitamente. Si está ocupado por un proceso ajeno, rechaza el conflicto sin cambiar de puerto. Guarda el puerto en `logs/app.port` solo para localizar la instancia al apagar. El argumento `--server.port` y la comprobación HTTP usan ese puerto; la URL de retorno de Google también, salvo configuración explícita mediante `APP_GOOGLE_REDIRECT_URI`. El origen y callback elegidos deben registrarse en Google para conectar Sheets. La espera de modelos tiene un límite real de 300 segundos, configurable con `-OcrStartupTimeoutSec`. `scripts/tests/local.tests.ps1` comprueba estos casos con procesos simulados. El entorno Java 17 usa su fallback TCP de loopback para evitar errores de sockets internos de Windows.
 - Los recursos/rutas inexistentes responden 404; métodos no permitidos responden 405 y solicitudes con tipo incompatible responden 415. No pasan por el handler genérico 500. El frontend declara `/favicon.svg`.
 - Parser basado en expresiones regulares, normalizacion de OCR, layout OCR cuando existe geometria y reglas hardcodeadas por comercio/producto.
 - Categoria base por comercio conocido, con fallback `Supermercado`.
@@ -472,6 +518,7 @@ npm:
 - Marcas: primero intenta el catálogo conocido; si no encuentra, puede inferir la marca desde las primeras palabras. Solo las correcciones recibidas por `CorrectionController` llaman a `BrandCatalog.remember` y persisten marcas; extraer un ticket no escribe el catálogo.
 - Comercio: deteccion por primeras lineas del ticket y posterior normalizacion via `StoreNameMapper`.
 - PedidosYa se detecta si alguna linea contiene `pedidosya`, `pedidos ya`, `podidosya` o una combinacion de `market` y `pedido`; usa parsing especial para cantidades `x`, kg y precios con descuentos y evita advertencias sobre bloques de interfaz.
+- Solo para PedidosYa, `ReceiptLayoutReader` conserva el resumen de pago después del subtotal, incluso entre páginas. `PedidosYaReceiptParser` busca `Cargo de servicio` o `Tarifa de servicio` en todo el comprobante y agrega una única fila al final, con cantidad 1, fecha/comercio del pedido e importe de la misma línea o de la siguiente si contiene solo un precio. Esa fila participa del total calculado y las siete columnas exportadas; no usa envío, descuentos ni total como precio del servicio. Si falta el importe, advierte sin inventarlo; conserva la incertidumbre OCR y las fuentes del cargo. La memoria se aplica también a este candidato sin quitar su ambigüedad.
 - En capturas de PedidosYa con cambios en el pago, el parser delimita `Tu pedido` hasta el pie del listado. Detecta si las cantidades separadas preceden a los nombres o siguen a los precios, y consume cada fila de precio junto con su descripción para evitar duplicados por texto de envases. Descarta el cobro extra, botones y el prefijo OCR espurio `0.00` antes del nombre; toma el primer precio (vigente), divide el importe de línea por la cantidad y conserva warnings de productos sin precio. Los pesos como `1kg1.08 kg` no se interpretan como importes. El catálogo incluye `Patitas` y `Noly`; la búsqueda del comercio revisa el encabezado completo aunque antes aparezca `Ayuda`. La fecha admite `09de oct`/`09deoct` y usa el año actual cuando falta. La memoria de correcciones se aplica sólo a candidatos del listado para que no reaparezcan filas descartadas. Estas reglas se verifican con texto OCR reproducible y geometría sintética en `PedidosYaReceiptParserTest`.
 - OCR Python compara también el original sin recorte ni contraste. Genera variantes de manera gradual para acotar memoria y reconoce imágenes largas por bloques sin reducir todo el ticket a un lado largo fijo. El scoring heurístico pondera estructura, precios y líneas tipo item por confianza, sin tokens de marcas concretas. El procesamiento por bloques puede aumentar el tiempo de OCR.
 
@@ -486,7 +533,7 @@ npm:
 - `OcrService` identifica PDF por firma de contenido, no por extensión o content type; sus límites y el procesamiento incremental tienen pruebas unitarias.
 - `application.properties` default apunta a `127.0.0.1:5000`; en Docker depende de variables de entorno convertidas por Spring relaxed binding.
 - `tessdata` sugiere una implementacion previa con Tesseract, pero no hay uso actual en codigo.
-- No hay persistencia de tickets, autenticación de usuarios ni rate limiting. Hay un catálogo histórico opcional de productos; Google Sheets requiere la autorización de la cuenta de servicio.
+- No hay persistencia de tickets, autenticación de usuarios ni rate limiting. Hay un catálogo histórico opcional de productos; Google Sheets requiere autorización OAuth del usuario para los archivos elegidos.
 - El contrato del endpoint `/ocr` tiene pruebas con PaddleOCR simulado. La evaluación real se ejecuta por separado sobre un corpus local y referencias verificadas; sus resultados y limitaciones no se deducen del éxito de los tests unitarios. Ver `OCR_EVALUATION.md`.
 
 ## Decisión pendiente: catálogo de correcciones compartidas

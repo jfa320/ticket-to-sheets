@@ -4,8 +4,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.opencode.facturas.model.ExtractResponse;
 import com.opencode.facturas.model.OcrDetection;
 import com.opencode.facturas.model.OcrResult;
+import com.opencode.facturas.model.ReceiptSource;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.file.Path;
 import java.time.LocalDate;
@@ -103,6 +106,45 @@ class PedidosYaReceiptParserTest {
     }
 
     @Test
+    void keepsLastProductWhenTallPackagingLetteringStartsAboveItsDescription() {
+        // Texto y geometría mínimos del fallo, sin captura ni datos personales.
+        OcrResult ocr = new OcrResult("", List.of(), List.of(
+                detection("PedidosYa Market", 20, 100, 400),
+                detection("Fecha 21/10/2026", 50, 100, 400),
+                detection("Tu pedido", 100, 20, 180),
+                detection("Papas prefritas 700 g", 813, 82, 315),
+                detection("1x", 813, 1350, 1370),
+                detection("$6.383,40$10.639", 833, 82, 250),
+                detection("40%OFF", 853, 82, 132),
+                new OcrDetection("CE", 0.52, List.of(
+                        List.of(42.0, 885.0), List.of(67.0, 885.0),
+                        List.of(67.0, 942.0), List.of(42.0, 942.0))),
+                new OcrDetection("Aceite De Girasol Cauelas 900 cm3", 0.94, List.of(
+                        List.of(93.0, 886.0), List.of(291.0, 886.0),
+                        List.of(291.0, 899.0), List.of(93.0, 899.0))),
+                detection("1x", 886, 1350, 1370),
+                new OcrDetection("$4.115", 0.97, List.of(
+                        List.of(92.0, 901.0), List.of(131.0, 901.0),
+                        List.of(131.0, 916.0), List.of(92.0, 916.0))),
+                detection("Ver menos", 974, 662, 734),
+                detection("Tu pago", 1000, 20, 180),
+                detection("Total $10.498,40", 1050, 20, 300)
+        ), "geometry", 100.0);
+
+        ExtractResponse response = parser(memory()).parse(ocr);
+
+        assertEquals(2, response.itemCount(), response.csv());
+        assertTrue(response.items().get(1).descripcion().startsWith("Aceite De Girasol"), response.csv());
+        assertEquals(List.of("1", "1"), response.items().stream().map(item -> item.cantidad()).toList());
+        assertEquals(List.of("6383,40", "4115,00"), response.items().stream().map(item -> item.precioUnitario()).toList());
+        assertEquals("10498,40", response.total());
+        assertEquals("AMBIGUOUS", response.items().get(1).estado());
+        assertFalse(response.warnings().stream().anyMatch(warning -> warning.contains("sin precio")),
+                response.warnings().toString());
+        assertEquals(List.of(8, 9), response.items().get(1).fuentesOcr().get(0).detectionIndices());
+    }
+
+    @Test
     void doesNotRecoverDiscardedInterfaceOrPackagingRowsFromCorrectionMemory() {
         CorrectionMemory memory = memory();
         for (String signature : List.of("opinar", "cobro extra", "como veo mi cobro extra", "patas", "noly", "paty")) {
@@ -143,6 +185,138 @@ class PedidosYaReceiptParserTest {
         assertEquals(List.of("1.08", "1", "2"), result.candidates().stream().map(item -> item.quantity()).toList());
         assertEquals(3, result.candidates().size());
         assertTrue(result.warnings().isEmpty());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"Cargo de servicio", "Tarifa de servicio"})
+    void addsServiceFeeFromPaymentSummaryToItemsTotalAndExports(String label) {
+        for (String separator : List.of(" ", "\n")) {
+            ExtractResponse response = parser(memory()).parse("""
+                    PedidosYa Market
+                    Fecha 21/10/2026
+                    Tu pedido
+                    Naranja Comercial $2.000 2x
+                    Ver menos
+                    Tu pago
+                    Subtotal $2.000
+                    """ + label + separator + "$299,50\nEnvío $900\nTotal $3.199,50");
+
+            assertEquals(2, response.itemCount(), response.csv());
+            var fee = response.items().get(1);
+            assertEquals(label.equals("Cargo de servicio") ? "Cargo De Servicio" : "Tarifa De Servicio", fee.descripcion());
+            assertEquals("Genérico", fee.marca());
+            assertEquals(response.storeName(), fee.lugarDeCompra());
+            assertEquals(response.date(), fee.fecha());
+            assertEquals("1", fee.cantidad());
+            assertEquals("299,50", fee.precioUnitario());
+            assertEquals("CORRECT", fee.estado());
+            assertEquals("2299,50", response.total());
+            assertTrue(response.csv().contains(fee.descripcion() + "|Genérico|" + response.storeName() + "|Supermercado|1|299,50|21/10/2026"));
+            assertEquals(2, response.tsvWithoutHeader().lines().count());
+            assertEquals(3, response.tsv().lines().count());
+            assertTrue(response.tsvWithoutHeader().lines().allMatch(line -> line.split("\t", -1).length == 7));
+        }
+    }
+
+    @Test
+    void addsOnlyOneServiceFeeEvenWhenRepeatedInOrderAndPaymentSummary() {
+        ExtractResponse response = parser(memory()).parse("""
+                PedidosYa Market
+                Tu pedido
+                2x
+                Naranja Comercial
+                $2.000
+                Cargo de servicio $299,50
+                Tu pago
+                Tarifa de servicio $299,50
+                """);
+
+        assertEquals(2, response.itemCount(), response.csv());
+        assertEquals(List.of("2", "1"), response.items().stream().map(item -> item.cantidad()).toList());
+        assertEquals("2299,50", response.total());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"Total $2.000", "Envío $900", "Otro producto $900 1x"})
+    void doesNotBorrowAnotherRowsAmountWhenServiceFeeHasNoPrice(String followingLine) {
+        ExtractResponse response = parser(memory()).parse("""
+                PedidosYa Market
+                Tu pedido
+                Naranja Comercial $2.000 2x
+                Tu pago
+                Cargo de servicio
+                """ + followingLine);
+
+        assertEquals(1, response.itemCount(), response.csv());
+        assertEquals("2000,00", response.total());
+        assertTrue(response.warnings().stream().anyMatch(warning -> warning.contains("sin precio") && warning.contains("Cargo de servicio")));
+    }
+
+    @Test
+    void doesNotUseServiceFeeAmountForAPrecedingProductWithoutPrice() {
+        var result = new PedidosYaReceiptParser(new ReceiptLineAnalyzer()).parse(List.of(
+                "Tu pedido", "Naranja Comercial 2x", "Cargo de servicio", "$299,50", "Tu pago"));
+
+        assertEquals(1, result.candidates().size());
+        assertEquals("Cargo de servicio", result.candidates().get(0).description());
+        assertEquals("1", result.candidates().get(0).quantity());
+        assertTrue(result.warnings().stream().anyMatch(warning -> warning.contains("sin precio") && warning.contains("Naranja")));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void preservesServiceFeeAfterSubtotalAndItsUncertainOcrEvidenceAfterLearning(boolean multipage) {
+        var detections = List.of(
+                detection("PedidosYa Market", 20, 20, 400),
+                detection("Fecha 21/10/2026", 60, 20, 400),
+                detection("Tu pedido", 100, 20, 180),
+                detection("Naranja Comercial $2.000 2x", 140, 20, 600),
+                detection("Tu pago", 180, 20, 180),
+                detection("Subtotal $2.000", 220, 20, 400),
+                detection("Tarifa de servicio", 260, 20, 400),
+                new OcrDetection("$299,50", 0.20, List.of(
+                        List.of(20.0, 300.0), List.of(180.0, 300.0),
+                        List.of(180.0, 320.0), List.of(20.0, 320.0))),
+                detection("Total $2.299,50", 340, 20, 400));
+        OcrResult ocr = new OcrResult("", List.of(), detections, "synthetic", 100.0);
+        if (multipage) {
+            ocr = new OcrResult("", List.of(), List.of(), "synthetic", 100.0, List.of(
+                    new OcrResult("", List.of(), detections.subList(0, 6), "synthetic", 100.0),
+                    new OcrResult("", List.of(), detections.subList(6, 9), "synthetic", 100.0)));
+        }
+        CorrectionMemory memory = memory();
+        ReceiptParserService parser = parser(memory);
+        var response = parser.parse(ocr);
+
+        assertEquals(2, response.itemCount(), response.csv());
+        var fee = response.items().get(1);
+        assertEquals("2299,50", response.total());
+        assertEquals("AMBIGUOUS", fee.estado());
+        ReceiptSource source = multipage ? new ReceiptSource(2, List.of(0, 1)) : new ReceiptSource(1, List.of(6, 7));
+        assertEquals(List.of(source), fee.fuentesOcr());
+        assertTrue(response.warnings().stream().anyMatch(warning -> warning.contains("lectura OCR")));
+        memory.upsert(fee.lugarDeCompra(), fee.firma(), "Servicio corregido", "Genérico", "Otros");
+        var learned = parser.parse(ocr).items().get(1);
+        assertEquals("Servicio corregido", learned.descripcion());
+        assertEquals("AMBIGUOUS", learned.estado());
+        assertTrue(learned.memorizado());
+        assertEquals(fee.precioUnitario(), learned.precioUnitario());
+    }
+
+    @Test
+    void doesNotRecoverServiceFeesFromSummaryForOtherStores() {
+        ExtractResponse response = parser(memory()).parse("""
+                Mercado de prueba
+                Fecha 21/10/2026
+                NARANJA 2000,00
+                Subtotal 2000,00
+                Cargo de servicio $299,50
+                Tarifa de servicio $299,50
+                Total 2299,50
+                """);
+
+        assertEquals(1, response.itemCount(), response.csv());
+        assertEquals("2000,00", response.total());
     }
 
     private void assertExpectedOrder(ExtractResponse response) {

@@ -1,0 +1,9 @@
+[
+  {"name":"half-cent-weight","items":[{"cantidad":"0,5","precioUnitario":"2,01"}],"discounts":[],"subtotal":"1.01","discountTotal":"0.00","total":"1.01"},
+  {"name":"round-after-sum","items":[{"cantidad":"0,5","precioUnitario":"2,01"},{"cantidad":"0,5","precioUnitario":"2,01"}],"discounts":[],"subtotal":"2.01","discountTotal":"0.00","total":"2.01"},
+  {"name":"negative-half-cent","items":[{"cantidad":"0,5","precioUnitario":"-2,01"}],"discounts":[],"subtotal":"-1.01","discountTotal":"0.00","total":"-1.01"},
+  {"name":"discount-half-cent","items":[{"cantidad":"0,5","precioUnitario":"2,01"}],"discounts":["-0,005"],"subtotal":"1.01","discountTotal":"-0.01","total":"1.00"},
+  {"name":"decimal-sum","items":[{"cantidad":"1","precioUnitario":"0,10"},{"cantidad":"1","precioUnitario":"0,20"}],"discounts":["-0,10"],"subtotal":"0.30","discountTotal":"-0.10","total":"0.20"},
+  {"name":"grouping-and-weight","items":[{"cantidad":"0,1234","precioUnitario":"1.234.567,89"}],"discounts":["-0,68"],"subtotal":"152345.68","discountTotal":"-0.68","total":"152345.00"},
+  {"name":"zero","items":[{"cantidad":"0","precioUnitario":"8,99"}],"discounts":[],"subtotal":"0.00","discountTotal":"0.00","total":"0.00"}
+]

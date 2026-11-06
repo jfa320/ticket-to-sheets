@@ -28,6 +28,7 @@ COPY ocr/illumination.py ./illumination.py
 COPY ocr/evaluate.py ./evaluate.py
 COPY ocr/benchmark.py ./benchmark.py
 COPY ocr/search_policy.py ./search_policy.py
+COPY ocr/fast_reading.py ./fast_reading.py
 COPY ocr/synthetic_corpus.py ./synthetic_corpus.py
 COPY ocr/receipt_metrics.py ./receipt_metrics.py
 COPY ocr/ocr_regions.py ./ocr_regions.py

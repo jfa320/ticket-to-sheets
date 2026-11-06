@@ -32,11 +32,43 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 class OcrApiClientTest {
+    @Test void preservesEncodedJpegBytesAndTheFastBudgetOnTheWire() {
+        var rest=mock(RestTemplate.class);
+        when(rest.getForEntity(HEALTH_URI,String.class)).thenReturn(ResponseEntity.ok("{\"ocrReady\":true}"));
+        when(rest.postForEntity(eq(OCR_URI),any(HttpEntity.class),eq(String.class))).thenReturn(ResponseEntity.ok("{}"));
+        byte[] bytes={(byte)255,(byte)216,(byte)255,42};
+        client(rest,1,new ArrayList<>()).recognizeEncodedJpeg(bytes,new ExtractionTask("test-id",8));
+        @SuppressWarnings({"rawtypes","unchecked"})
+        var capture=ArgumentCaptor.forClass((Class)HttpEntity.class);
+        verify(rest).postForEntity(eq(OCR_URI),capture.capture(),eq(String.class));
+        var request=(HttpEntity<?>)capture.getValue();
+        assertThat(request.getHeaders().getContentType()).isEqualTo(MediaType.IMAGE_JPEG);
+        assertThat(request.getHeaders().getFirst("X-OCR-Search-Budget-Seconds")).isEqualTo("8");
+        assertThat((byte[])request.getBody()).containsExactly(bytes);
+    }
 
     private static final String OCR_ENDPOINT = "http://127.0.0.1:5000/ocr";
     private static final String HEALTH_ENDPOINT = "http://127.0.0.1:5000/health";
     private static final URI OCR_URI = URI.create(OCR_ENDPOINT);
     private static final URI HEALTH_URI = URI.create(HEALTH_ENDPOINT);
+
+    @Test void forwardsOnlyTheRemainingDocumentBudgetWithoutOverridingThePageProfile() {
+        RestTemplate rest = mock(RestTemplate.class);
+        when(rest.getForEntity(HEALTH_URI, String.class)).thenReturn(ResponseEntity.ok("{\"ocrReady\":true}"));
+        when(rest.postForEntity(eq(OCR_URI), any(HttpEntity.class), eq(String.class))).thenReturn(ResponseEntity.ok("{}"));
+        var clock = new java.util.concurrent.atomic.AtomicLong();
+        var task = new ExtractionTask(null, 40, clock::get); task.startDeadline(60);
+        clock.set(58_500_000_000L);
+        var client = client(rest, 1, new ArrayList<>());
+        client.recognize(new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB), task);
+        client.recognize(new BufferedImage(1, 1, BufferedImage.TYPE_INT_RGB));
+        @SuppressWarnings({"rawtypes", "unchecked"})
+        ArgumentCaptor<HttpEntity<byte[]>> requests = ArgumentCaptor.forClass((Class) HttpEntity.class);
+        verify(rest, times(2)).postForEntity(eq(OCR_URI), requests.capture(), eq(String.class));
+        assertThat(requests.getAllValues().get(0).getHeaders().getFirst("X-OCR-Document-Remaining-Seconds")).isEqualTo("1.5");
+        assertThat(requests.getAllValues().get(0).getHeaders().getFirst("X-OCR-Search-Budget-Seconds")).isEqualTo("40");
+        assertThat(requests.getAllValues().get(1).getHeaders().getFirst("X-OCR-Document-Remaining-Seconds")).isNull();
+    }
 
     @Test
     void sendsPngWithLanguageHeaderAfterHealthyResponse() {
@@ -117,7 +149,7 @@ class OcrApiClientTest {
     }
 
     @Test
-    void preservesHttpStatusAndBodyFromOcrFailure() {
+    void reportsHttpStatusWithoutExposingTheOcrFailureBody() {
         RestTemplate restTemplate = mock(RestTemplate.class);
         when(restTemplate.getForEntity(HEALTH_URI, String.class))
                 .thenReturn(ResponseEntity.ok("{\"ocrReady\":true}"));
@@ -135,7 +167,7 @@ class OcrApiClientTest {
         ))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("500")
-                .hasMessageContaining("fallo interno");
+                .hasMessageNotContaining("fallo interno");
     }
 
     @Test

@@ -18,7 +18,7 @@ final class ReceiptEvidenceMapper {
                 available.computeIfAbsent(signature, key -> new ArrayDeque<>()).add(source);
             } else if (!analyzer.shouldSkip(signature)) {
                 List<Integer> indices = new ArrayList<>(source.detectionIndices());
-                if (index + 1 < layout.lines().size() && analyzer.isPriceOnly(layout.lines().get(index + 1))) {
+                if (index + 1 < layout.lines().size() && analyzer.isMoneyValue(layout.lines().get(index + 1))) {
                     ReceiptSource price = layout.sourcesByLine().get(index + 1);
                     if (price != null && price.pageNumber() == source.pageNumber()) indices.addAll(price.detectionIndices());
                 }

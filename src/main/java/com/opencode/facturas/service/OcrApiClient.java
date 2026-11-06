@@ -100,15 +100,25 @@ class OcrApiClient {
 
     String recognize(BufferedImage image, ExtractionTask task) {
         ensureReady(task);
+        return recognizePayload(toPngBytes(image), MediaType.IMAGE_PNG, task);
+    }
+
+    String recognizeEncodedJpeg(byte[] jpeg, ExtractionTask task) {
+        ensureReady(task);
+        return recognizePayload(jpeg, MediaType.IMAGE_JPEG, task);
+    }
+
+    private String recognizePayload(byte[] bytes, MediaType contentType, ExtractionTask task) {
         HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.IMAGE_PNG);
+        headers.setContentType(contentType);
         headers.setAccept(List.of(MediaType.APPLICATION_JSON));
         headers.set("X-OCR-Language", language);
         if (task.id != null) headers.set("X-Extraction-Id", task.id);
         if (task.searchBudgetSeconds != null) headers.set("X-OCR-Search-Budget-Seconds", task.searchBudgetSeconds.toString());
 
-        HttpEntity<byte[]> request = new HttpEntity<>(toPngBytes(image), headers);
         task.checkCancelled();
+        if (task.hasDeadline()) headers.set("X-OCR-Document-Remaining-Seconds", Double.toString(task.remainingSeconds()));
+        HttpEntity<byte[]> request = new HttpEntity<>(bytes, headers);
         try {
             // No repetir una lectura tras perder la respuesta: Python puede seguir procesándola.
             ResponseEntity<String> response = restTemplate.postForEntity(URI.create(endpoint), request, String.class);
@@ -124,6 +134,7 @@ class OcrApiClient {
             }
             throw new OcrUnavailableException("Se perdió la conexión con el OCR. La lectura puede seguir en curso; revisá el servicio y esperá antes de reintentar.", ex);
         } catch (HttpStatusCodeException ex) {
+            if (ex.getStatusCode().value() == 408) throw new ExtractionTimeoutException();
             if (ex.getStatusCode().value() == 409) {
                 throw new ExtractionCancelledException();
             }
@@ -133,9 +144,9 @@ class OcrApiClient {
             if (ex.getStatusCode().value() == 503) {
                 throw new OcrUnavailableException("El OCR está preparando los modelos. Esperá a que termine y reintentá.", ex);
             }
-            String responseBody = ex.getResponseBodyAsString();
-            log.error("Servicio OCR respondió HTTP {}: {}", ex.getStatusCode(), responseBody, ex);
-            throw new IllegalStateException("El servicio OCR respondió con error " + ex.getStatusCode() + ": " + responseBody, ex);
+            log.error("Servicio OCR respondió HTTP {}", ex.getStatusCode().value());
+            log.debug("Detalle de error OCR", ex);
+            throw new IllegalStateException("El servicio OCR respondió con error " + ex.getStatusCode().value() + ". Revisá el diagnóstico local.");
         } catch (RestClientException ex) {
             log.error("Error de comunicación con el servicio OCR", ex);
             throw new IllegalStateException("El servicio OCR respondió con error. Revisá los logs del OCR.", ex);

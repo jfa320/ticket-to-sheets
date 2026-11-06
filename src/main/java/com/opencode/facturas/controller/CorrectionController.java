@@ -58,8 +58,7 @@ public class CorrectionController {
             rememberBrandIfValid(correction.marca());
             saved++;
         }
-        log.info("Correcciones procesadas: recibidas={}, guardadas={}, comercio='{}'",
-                corrections.size(), saved, request.store());
+        log.info("Correcciones procesadas: recibidas={}, guardadas={}", corrections.size(), saved);
         return new LearnResponse(saved);
     }
 

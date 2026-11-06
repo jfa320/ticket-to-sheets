@@ -13,9 +13,43 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class BrandCatalogComponentsTest {
+    @Test void cachedAliasesFollowLearningAndReplacementWithoutLeakingRemovedBrands() {
+        var catalog = new BrandCatalog(new ObjectMapper(), tempDir.resolve("brands.json"));
+        assertThat(catalog.findAnywhereIn("Leche Marca Nueva entera")).isEmpty();
+        catalog.remember("Marca Nueva");
+        assertThat(catalog.findAnywhereIn("Leche Marca Nueva entera")).get()
+                .extracting(BrandCatalog.BrandMatch::brand).isEqualTo("Marca Nueva");
+        catalog.applySnapshot(List.of("Otra Marca"));
+        assertThat(catalog.findAnywhereIn("Leche Marca Nueva entera")).isEmpty();
+        assertThat(catalog.findAnywhereIn("Leche Otra Marca entera")).get()
+                .extracting(BrandCatalog.BrandMatch::brand).isEqualTo("Otra Marca");
+    }
 
     @TempDir
     Path tempDir;
+
+    @Test void brandsInsideDescriptionsRequireCompleteWordsAndAllowSplitOcrSpelling() {
+        var matcher = new BrandCatalogMatcher(Set.of("Lux", "McCain", "La Paulina"));
+        assertThat(matcher.findAnywhereIn("Jabon Lux neutro")).get().extracting(BrandCatalog.BrandMatch::brand).isEqualTo("Lux");
+        assertThat(matcher.findAnywhereIn("Papas Mc Cain finitas")).get().extracting(BrandCatalog.BrandMatch::brand).isEqualTo("McCain");
+        assertThat(matcher.findAnywhereIn("Queso La Paulina rallado")).isPresent();
+        assertThat(matcher.findAnywhereIn("Papel de Luxemburgo")).isEmpty();
+        assertThat(matcher.findAnywhereIn("Producto Superlux")).isEmpty();
+    }
+
+    @Test void genericProductPrefixDoesNotHideAKnownBrandOrChangeAmounts() {
+        var mapper = new ObjectMapper();
+        var catalog = new BrandCatalog(mapper, tempDir.resolve("brands.json")); catalog.remember("Marca Prueba");
+        var parser = new ReceiptParserService(StoreNameMapper.empty(), catalog,
+                new CorrectionMemory(mapper, tempDir.resolve("memory.json")));
+        var result = parser.parse("Comercio Ficticio\nFecha 1/10/2026\nLECHE MARCA PRUEBA ENTERA 1L 1200,00");
+        assertThat(result.items()).singleElement().satisfies(item -> {
+            assertThat(item.marca()).isEqualTo("Marca Prueba");
+            assertThat(item.descripcion()).contains("Entera", "1l");
+            assertThat(item.precioUnitario()).isEqualTo("1200,00");
+            assertThat(item.firma()).isEqualTo("leche marca prueba entera 1l");
+        });
+    }
 
     @Test
     void matcherUsesCatalogAliasesAndLongestMatch() {

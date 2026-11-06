@@ -22,15 +22,30 @@ final class ReceiptLayoutReader {
     private static final double EXTREME_BOX_ASPECT_RATIO = 28.0;
     private static final Pattern QUANTITY_TOKEN_PATTERN = Pattern.compile("^\\d{1,4}(?:[\\.,]\\d{1,4})?$");
     private static final Pattern MULTIPLIER_BEFORE_PRICE_PATTERN = Pattern.compile(
-            "(?i)(?:^|\\s)(\\d+(?:[\\.,]\\d{1,4})?)\\s*x\\s*\\$?\\s*\\d"
+            "(?i)(?:^|\\s)(\\d{1,4}(?:[\\.,]\\d{1,4})?)\\s*x\\s*\\$?\\s*\\d"
     );
 
     private final ReceiptLineAnalyzer lineAnalyzer;
     private final ReceiptAmounts amounts;
+    private final ReceiptProductBlockReader blockReader;
 
     ReceiptLayoutReader(ReceiptLineAnalyzer lineAnalyzer, ReceiptAmounts amounts) {
         this.lineAnalyzer = lineAnalyzer;
         this.amounts = amounts;
+        this.blockReader = new ReceiptProductBlockReader(lineAnalyzer, amounts);
+    }
+
+    Layout readText(String text) {
+        List<Row> rows = text.lines().map(String::trim).filter(line -> !line.isBlank())
+                .map(line -> new Row(List.of(new Box(line, null, 0, 0, 0, 0)))).toList();
+        List<String> lines = new ArrayList<>();
+        Map<Integer, List<Candidate>> candidates = new LinkedHashMap<>();
+        Map<Integer, Boolean> uncertainty = new LinkedHashMap<>();
+        Map<Integer, ReceiptSource> sources = new LinkedHashMap<>();
+        List<String> warnings = new ArrayList<>();
+        appendRows(rows, lines, candidates, uncertainty, sources, 1,
+                new PedidosYaReceiptParser(lineAnalyzer).supports(rows.stream().map(Row::text).toList()), false, warnings);
+        return new Layout(lines, candidates, uncertainty, sources, warnings);
     }
 
     Layout read(OcrResult result) {
@@ -44,32 +59,55 @@ final class ReceiptLayoutReader {
         Map<Integer, Boolean> uncertainByLine = new LinkedHashMap<>();
 
         Map<Integer, ReceiptSource> sources = new LinkedHashMap<>();
-        for (int pageIndex = 0; pageIndex < pages.size(); pageIndex++) {
-            OcrResult page = pages.get(pageIndex);
+        List<String> warnings = new ArrayList<>();
+        List<List<Row>> rowsByPage = new ArrayList<>();
+        for (OcrResult page : pages) {
             List<Row> rows = rowsFromDetections(page.detections());
             if (rows.isEmpty()) {
                 rows = rowsFromLines(page.lines());
             }
-
-            appendRows(rows, lines, candidatesByLine, uncertainByLine, sources, pageIndex + 1);
+            rowsByPage.add(rows);
+        }
+        boolean preservePaymentSummary = new PedidosYaReceiptParser(lineAnalyzer).supports(
+                rowsByPage.stream().flatMap(List::stream).map(Row::text).toList());
+        for (int pageIndex = 0; pageIndex < rowsByPage.size(); pageIndex++) {
+            appendRows(rowsByPage.get(pageIndex), lines, candidatesByLine, uncertainByLine, sources,
+                    pageIndex + 1, preservePaymentSummary, true, warnings);
         }
 
         if (lines.isEmpty() && result.text() != null) {
-            lines.addAll(result.text().lines()
-                    .map(String::trim)
-                    .filter(line -> !line.isBlank())
-                    .toList());
+            return readText(result.text());
         }
 
-        return new Layout(lines, candidatesByLine, uncertainByLine, sources);
+        return new Layout(lines, candidatesByLine, uncertainByLine, sources, warnings);
     }
 
     private void appendRows(List<Row> rows, List<String> lines, Map<Integer, List<Candidate>> candidatesByLine,
-                            Map<Integer, Boolean> uncertainByLine, Map<Integer, ReceiptSource> sources, int pageNumber) {
+                            Map<Integer, Boolean> uncertainByLine, Map<Integer, ReceiptSource> sources,
+                            int pageNumber, boolean preservePaymentSummary, boolean readRowCandidates, List<String> warnings) {
+        List<String> rowTexts = rows.stream().map(Row::text).toList();
         for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
             Row row = rows.get(rowIndex);
-            if (lineAnalyzer.isProductFooter(lineAnalyzer.normalize(row.text()))) break;
-            if (rowIndex + 1 < rows.size()) {
+            if (!preservePaymentSummary && lineAnalyzer.isProductFooter(lineAnalyzer.normalize(row.text()))) break;
+            Optional<ReceiptProductBlockReader.Block> block = blockReader.read(rowTexts, rowIndex);
+            if (block.isPresent()) {
+                var value = block.get();
+                warnings.addAll(value.warnings());
+                if (!value.description().isBlank()) {
+                    List<Row> consumed = rows.subList(rowIndex, value.endIndex() + 1);
+                    boolean uncertain = consumed.stream().anyMatch(Row::hasUncertainOcr);
+                    int lineIndex = lines.size();
+                    lines.add(value.line());
+                    uncertainByLine.put(lineIndex, uncertain);
+                    sources.put(lineIndex, new ReceiptSource(pageNumber, consumed.stream().flatMap(r -> r.boxes.stream())
+                            .map(Box::index).filter(index -> index >= 0).distinct().toList()));
+                    candidatesByLine.put(lineIndex, List.of(new Candidate(value.description(), value.rawPrice(),
+                            value.quantity(), value.priceIsUnit(), value.ambiguous() || uncertain, value.description())));
+                    rowIndex = value.endIndex();
+                    continue;
+                }
+            }
+            if (readRowCandidates && rowIndex + 1 < rows.size()) {
                 Row followingRow = rows.get(rowIndex + 1);
                 Optional<Candidate> followingCandidate = followingRow.candidate(lineAnalyzer, amounts);
                 if (followingCandidate.isPresent() && !followingCandidate.get().priceIsUnit()) {
@@ -86,7 +124,7 @@ final class ReceiptLayoutReader {
                                 candidate.rawPrice(),
                                 quantityPrice.get().quantity(),
                                 false,
-                                candidate.ambiguous() || quantityPrice.get().uncertain(),
+                                candidate.ambiguous() || quantityPrice.get().uncertain() || row.hasUncertainOcr(),
                                 candidate.sourceLine()
                         )));
                         rowIndex++;
@@ -99,7 +137,7 @@ final class ReceiptLayoutReader {
             sources.put(lineIndex, new ReceiptSource(pageNumber, row.boxes.stream().map(Box::index).filter(index -> index >= 0).toList()));
             lines.add(row.text());
             uncertainByLine.put(lineIndex, row.hasUncertainOcr());
-            row.candidate(lineAnalyzer, amounts).ifPresent(candidate ->
+            if (readRowCandidates) row.candidate(lineAnalyzer, amounts).ifPresent(candidate ->
                     candidatesByLine.put(lineIndex, List.of(candidate)));
         }
     }
@@ -151,7 +189,9 @@ final class ReceiptLayoutReader {
         }
 
         return rows.stream()
-                .sorted(Comparator.comparingDouble(MutableRow::top).thenComparingDouble(MutableRow::left))
+                // Tall package lettering can start above a description while
+                // belonging to its price row. Keep the rows in reading order.
+                .sorted(Comparator.comparingDouble(MutableRow::center).thenComparingDouble(MutableRow::left))
                 .map(row -> new Row(row.boxes()))
                 .toList();
     }
@@ -216,9 +256,14 @@ final class ReceiptLayoutReader {
     }
 
     record Layout(List<String> lines, Map<Integer, List<Candidate>> candidatesByLine,
-                  Map<Integer, Boolean> uncertainByLine, Map<Integer, ReceiptSource> sourcesByLine) {
+                  Map<Integer, Boolean> uncertainByLine, Map<Integer, ReceiptSource> sourcesByLine, List<String> warnings) {
+        Layout(List<String> lines, Map<Integer, List<Candidate>> candidatesByLine,
+               Map<Integer, Boolean> uncertainByLine, Map<Integer, ReceiptSource> sourcesByLine) {
+            this(lines, candidatesByLine, uncertainByLine, sourcesByLine, List.of());
+        }
+
         Layout(List<String> lines, Map<Integer, List<Candidate>> candidatesByLine, Map<Integer, Boolean> uncertainByLine) {
-            this(lines, candidatesByLine, uncertainByLine, Map.of());
+            this(lines, candidatesByLine, uncertainByLine, Map.of(), List.of());
         }
     }
 

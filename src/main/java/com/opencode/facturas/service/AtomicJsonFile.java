@@ -67,6 +67,14 @@ final class AtomicJsonFile {
         return path.resolveSibling(path.getFileName() + ".bak");
     }
 
+    static void replaceWithoutBackup(ObjectMapper mapper, Path path, Object value) throws IOException {
+        Path target = path.toAbsolutePath().normalize();
+        Files.createDirectories(target.getParent());
+        Path staged = createTemporaryFile(target, ".restore.tmp");
+        try { mapper.writeValue(staged.toFile(), value); moveReplacing(staged, target); }
+        finally { deleteTemporaryFile(staged); }
+    }
+
     private static <T> T recover(ObjectMapper objectMapper, Path target, Path backup,
                                  JavaType valueType, IOException primaryFailure) {
         if (!Files.exists(backup)) {
@@ -114,10 +122,30 @@ final class AtomicJsonFile {
     }
 
     private static void moveReplacing(Path source, Path target) throws IOException {
+        retryMove(() -> {
         try {
             Files.move(source, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         } catch (AtomicMoveNotSupportedException ex) {
             Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
+        }
+        }, Thread::sleep);
+    }
+
+    @FunctionalInterface interface MoveOperation { void run() throws IOException; }
+    @FunctionalInterface interface MoveWait { void sleep(long millis) throws InterruptedException; }
+
+    static void retryMove(MoveOperation move, MoveWait wait) throws IOException {
+        for (int attempt=0;;attempt++) {
+            try { move.run(); return; }
+            catch (java.nio.file.AccessDeniedException error) {
+                if (attempt == 3) throw error;
+                try { wait.sleep(25L << attempt); }
+                catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    var failure=new java.io.InterruptedIOException("Se interrumpió el reemplazo del archivo JSON.");
+                    failure.initCause(interrupted); throw failure;
+                }
+            }
         }
     }
 

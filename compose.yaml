@@ -9,7 +9,14 @@ services:
       APP_OCR_ENDPOINT: http://paddleocr:5000/ocr
       APP_OCR_HEALTH_ENDPOINT: http://paddleocr:5000/health
       APP_OCR_LANGUAGE: es
-      APP_SHEETS_CREDENTIALS_PATH: ${APP_SHEETS_CREDENTIALS_PATH:-/app/data/google-service-account.json}
+      APP_OCR_SEARCH_BUDGET_SECONDS: ${APP_OCR_SEARCH_BUDGET_SECONDS:-8}
+      APP_PDF_PROCESSING_BUDGET_SECONDS: ${APP_PDF_PROCESSING_BUDGET_SECONDS:-300}
+      APP_GOOGLE_CLIENT_ID: ${APP_GOOGLE_CLIENT_ID:-}
+      APP_GOOGLE_CLIENT_SECRET: ${APP_GOOGLE_CLIENT_SECRET:-}
+      APP_GOOGLE_PICKER_API_KEY: ${APP_GOOGLE_PICKER_API_KEY:-}
+      APP_GOOGLE_APP_ID: ${APP_GOOGLE_APP_ID:-}
+      APP_GOOGLE_REDIRECT_URI: ${APP_GOOGLE_REDIRECT_URI:-http://localhost:8080/api/sheets/oauth/callback}
+      APP_GOOGLE_TOKENS_PATH: /app/data/google-oauth-tokens.json
       APP_SHEETS_CONFIG_PATH: /app/data/sheets-config.json
       APP_SHEETS_HISTORY_PATH: /app/data/sheets-history.json
       APP_SHEETS_TIMEOUT_MS: ${APP_SHEETS_TIMEOUT_MS:-15000}
@@ -31,6 +38,8 @@ services:
     container_name: facturas-paddleocr
     environment:
       OCR_DEFAULT_LANGUAGE: es
+      OCR_CPU_THREADS: ${OCR_CPU_THREADS:-4}
+      OCR_ENABLE_MKLDNN: ${OCR_ENABLE_MKLDNN:-true}
       OCR_BIND_HOST: 0.0.0.0
       TZ: America/Argentina/Buenos_Aires
       FLAGS_use_mkldnn: "0"

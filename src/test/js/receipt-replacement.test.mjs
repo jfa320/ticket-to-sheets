@@ -15,8 +15,27 @@ const payload = description => ({storeName: 'Comercio de prueba', date: '7/10/20
         lugarDeCompra: 'Comercio de prueba', cantidad: '1', precioUnitario: '100,00',
         fecha: '7/10/2026', firma: description, estado: 'AMBIGUOUS'}]});
 
+test('cancelar mientras se guardan correcciones impide iniciar la extracción nueva', async () => {
+    const app=createApp(); await editedReceipt(app); const before=snapshot(app); let saved;
+    app.savers[0].flush=()=>new Promise(resolve=>{saved=resolve;});
+    app.select('nuevo.png'); const pending=app.submit();
+    await app.element('cancelExtraction').dispatch('click'); saved(true); await pending;
+    assert.equal(app.extractionCalls(),1); assert.deepEqual(snapshot(app),before);
+    assert.match(app.element('status').textContent,/cancelada/);
+});
+
+test('cancelar una extracción descarta su respuesta tardía y permite intentar otra', async () => {
+    const app=createApp(); await editedReceipt(app); const before=snapshot(app); let finish;
+    app.setExtraction(()=>new Promise(resolve=>{finish=resolve;})); app.select('nuevo.png');
+    const pending=app.submit(); await new Promise(resolve=>setImmediate(resolve));
+    await app.element('cancelExtraction').dispatch('click'); finish(payload('Respuesta descartada')); await pending;
+    assert.deepEqual(snapshot(app),before); assert.match(app.element('status').textContent,/cancelada/);
+    app.setExtraction(async()=>payload('Reintento correcto')); await app.submit();
+    assert.equal(app.items()[0].descripcion,'Reintento correcto');
+});
+
 // Ejecutar el controlador real con sus imports inyectados, sin bundler ni dependencias DOM.
-function createApp() {
+function createApp({copyToClipboard = async () => {}} = {}) {
     const elements = new Map();
     function element(id) {
         if (elements.has(id)) return elements.get(id);
@@ -31,7 +50,7 @@ function createApp() {
             },
             addEventListener(type, listener) { listeners.set(type, listener); },
             dispatch(type, event = {}) { return listeners.get(type)?.({preventDefault() {}, target: node, ...event}); },
-            setAttribute() {}, append(child) { node.children.push(child); },
+            setAttribute() {}, removeAttribute() {}, append(child) { node.children.push(child); },
             replaceChildren() { node.children = []; }, querySelectorAll() { return []; }, focus() {}
         };
         elements.set(id, node);
@@ -45,8 +64,8 @@ function createApp() {
     let extractionCalls = 0;
     let extract = async () => payload('Producto anterior');
     const dependencies = {
-        ...model, validateFile,
-        createCorrectionManager() {},
+        ...model, validateFile, copyToClipboard,
+        createCorrectionManager() {}, loadCategories: async () => {},
         createReceiptExtraction: options => createReceiptExtraction({...options,
             extract: uploaded => { extractionCalls++; return extract(uploaded); },
             cancel: async () => ({cancelled: true}), createId: () => `extraction-${extractionCalls}`}),
@@ -71,7 +90,8 @@ function createApp() {
             sheetsOptions = options;
             return {refresh() {}, setProcessing() {}, resetReceipt() { sheetsResets++; }};
         },
-        document: {getElementById: element, querySelector: element, querySelectorAll: () => [], createElement: () => element(Symbol())},
+        document: {getElementById: element, querySelector: element, querySelectorAll: () => [], createElement: () => element(Symbol()),
+            addEventListener: (...args) => element('document').addEventListener(...args)},
         URL: {createObjectURL: () => 'blob:synthetic-preview', revokeObjectURL() {}},
         requestAnimationFrame: callback => callback(), setTimeout: () => 1, clearTimeout() {}, console: {error() {}}
     };
@@ -82,6 +102,8 @@ function createApp() {
         setExtraction(handler) { extract = handler; },
         select(name) { element('fileInput').files = [file(name)]; element('fileInput').dispatch('change'); },
         submit: () => element('uploadForm').dispatch('submit'),
+        paste: event => element('document').dispatch('paste', event),
+        setSheetsBusy: busy => sheetsOptions.onBusy(busy),
         edit(field, value) { element('itemsBody').handlers.onEdit(sheetsOptions.getItems()[0], field, value); }
     };
 }
@@ -210,4 +232,159 @@ test('replacing a discounted receipt with a legacy response clears the discounts
     assert.equal(app.element('discountsList').children.length, 0);
     assert.equal(app.element('discountsPanel').classList.contains('hidden'), true);
     assert.equal(app.element('totalValue').textContent, model.formatTotal(100));
+});
+
+function imagePaste(image = file('image.png'), overrides = {}) {
+    const event = {
+        defaultPrevented: false,
+        preventDefault() { event.defaultPrevented = true; },
+        clipboardData: {items: [
+            {kind: 'string', type: 'text/plain'},
+            {kind: 'file', type: image.type, getAsFile: () => image}
+        ]},
+        ...overrides
+    };
+    return event;
+}
+
+test('pasting a clipboard image selects it and waits for manual extraction like a regular upload', async () => {
+    const app = createApp();
+    const image = file('image.png');
+    const uploads = [];
+    app.setExtraction(async uploaded => { uploads.push(uploaded); return payload('Producto pegado'); });
+    app.element('fileInput').value = 'previous.png';
+    const event = imagePaste(image);
+    await app.paste(event);
+    assert.equal(event.defaultPrevented, true);
+    assert.deepEqual(uploads, []);
+    assert.equal(app.element('fileInput').value, '');
+    assert.equal(app.element('fileName').textContent, image.name);
+    assert.equal(app.element('filePreviewContent').children[0].src, 'blob:synthetic-preview');
+    assert.equal(app.element('submitButton').disabled, false);
+    assert.equal(app.element('viewFile').disabled, false);
+    assert.match(app.element('status').textContent, /Archivo listo/);
+    assert.equal(app.items().length, 0);
+    await app.submit();
+    assert.deepEqual(uploads, [image]);
+    assert.equal(app.items()[0].descripcion, 'Producto pegado');
+    assert.match(app.element('csvOutput').value, /Producto pegado/);
+    assert.equal(app.element('results').inert, false);
+});
+
+test('clipboard files fallback accepts the first image and ignores PDF and text', async () => {
+    const app = createApp();
+    const image = file('captura.png');
+    const uploads = [];
+    app.setExtraction(async uploaded => { uploads.push(uploaded); return payload('Captura'); });
+    await app.paste(imagePaste(image, {clipboardData: {
+        items: [{kind: 'file', type: 'image/png', getAsFile: () => null}],
+        files: [{name: 'documento.pdf', type: 'application/pdf'}, image, file('otra.png')]
+    }}));
+    assert.deepEqual(uploads, []);
+    for (const clipboardData of [undefined, {items: []}, {items: [{kind: 'string', type: 'text/plain'}]},
+        {files: [{name: 'documento.pdf', type: 'application/pdf'}]}]) {
+        const event = imagePaste(image, {clipboardData});
+        await app.paste(event);
+        assert.equal(event.defaultPrevented, false);
+    }
+    assert.equal(uploads.length, 0);
+    assert.equal(app.element('fileName').textContent, image.name);
+    await app.submit();
+    assert.deepEqual(uploads, [image]);
+});
+
+test('paste preserves native editing in fields, editable descendants and dialogs', async () => {
+    const app = createApp();
+    for (const selector of ['input:not([type="file"])', 'textarea', 'select', '[role="textbox"]', 'dialog']) {
+        const target = {closest: query => query.includes(selector) ? target : null};
+        const event = imagePaste(undefined, {target});
+        await app.paste(event);
+        assert.equal(event.defaultPrevented, false, selector);
+    }
+    const editable = imagePaste(undefined, {target: {isContentEditable: true}});
+    await app.paste(editable);
+    assert.equal(editable.defaultPrevented, false);
+    await app.paste(imagePaste(undefined, {defaultPrevented: true}));
+    assert.equal(app.extractionCalls(), 0);
+});
+
+test('paste validates empty and oversized images without uploading', async () => {
+    const app = createApp();
+    for (const [size, message] of [[0, /vacío/], [20 * 1024 * 1024 + 1, /20 MB/]]) {
+        const event = imagePaste({...file('grande.png'), size});
+        await app.paste(event);
+        assert.equal(event.defaultPrevented, true);
+        assert.match(app.element('status').textContent, message);
+        assert.equal(app.element('submitButton').disabled, true);
+    }
+    assert.equal(app.extractionCalls(), 0);
+});
+
+test('paste cannot replace a file while extraction or a Sheets transfer is busy', async () => {
+    const app = createApp();
+    let finish;
+    let started;
+    const ready = new Promise(resolve => { started = resolve; });
+    app.setExtraction(() => { started(); return new Promise(resolve => { finish = resolve; }); });
+    await app.paste(imagePaste(file('primera.png')));
+    const pending = app.submit();
+    await ready;
+    const duringExtraction = imagePaste(file('segunda.png'));
+    await app.paste(duringExtraction);
+    assert.equal(duringExtraction.defaultPrevented, false);
+    assert.equal(app.element('fileName').textContent, 'primera.png');
+    assert.equal(app.extractionCalls(), 1);
+    finish(payload('Primera'));
+    await pending;
+    app.setSheetsBusy(true);
+    const duringSheets = imagePaste(file('tercera.png'));
+    await app.paste(duringSheets);
+    assert.equal(duringSheets.defaultPrevented, false);
+    assert.equal(app.extractionCalls(), 1);
+    assert.equal(app.element('fileName').textContent, 'primera.png');
+    app.setSheetsBusy(false);
+});
+
+test('a failed pasted extraction saves corrections and preserves the edited receipt for retry', async () => {
+    const app = createApp();
+    await editedReceipt(app);
+    const before = snapshot(app);
+    app.setExtraction(async () => { throw new Error('OCR apagado'); });
+    await app.paste(imagePaste(file('pegada.png')));
+    assert.deepEqual(snapshot(app), before, 'pegar conserva el ticket sin iniciar otra extracción');
+    assert.equal(app.extractionCalls(), 1);
+    assert.equal(app.corrections.length, 0, 'las correcciones se guardan al presionar Extraer datos');
+    await app.submit();
+    assert.deepEqual(snapshot(app), before);
+    assert.equal(app.corrections[0].corrections[0].descripcion, 'Descripción corregida');
+    assert.match(app.element('status').textContent, /Se conserva el ticket anterior/);
+    assert.equal(app.element('submitButton').disabled, false);
+    app.setExtraction(async () => payload('Reintento'));
+    await app.submit();
+    assert.equal(app.items()[0].descripcion, 'Reintento');
+});
+
+test('copy buttons preserve the edited export and report success after the compatible clipboard writer completes', async () => {
+    const copied = [];
+    const app = createApp({copyToClipboard: async text => { copied.push(text); }});
+    await editedReceipt(app);
+    const before = snapshot(app);
+    await app.element('copyTsv').dispatch('click');
+    assert.deepEqual(copied, [before.tsv]);
+    assert.match(app.element('copyToast').textContent, /Filas copiadas para Google Sheets/);
+    assert.equal(app.element('copyToast').classList.contains('copy-toast-error'), false);
+    await app.element('copyPipe').dispatch('click');
+    assert.deepEqual(copied, [before.tsv, before.pipe]);
+    assert.equal(app.element('copyToast').textContent, 'Texto copiado.');
+    assert.deepEqual(snapshot(app), before);
+});
+
+test('clipboard failure preserves the export and reports manual copying without a false success', async () => {
+    const app = createApp({copyToClipboard: async () => { throw new Error('clipboard blocked'); }});
+    await editedReceipt(app);
+    const before = snapshot(app);
+    await app.element('copyTsv').dispatch('click');
+    assert.match(app.element('copyToast').textContent, /No se pudo copiar/);
+    assert.equal(app.element('copyToast').classList.contains('copy-toast-error'), true);
+    assert.deepEqual(snapshot(app), before);
 });

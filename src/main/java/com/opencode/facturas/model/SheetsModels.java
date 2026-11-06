@@ -17,8 +17,8 @@ public final class SheetsModels {
 
     public record ConfigResponse(String spreadsheetId, String spreadsheetUrl, Integer year,
                                  int headerRow, Map<String, String> monthSheets, String legacySheetName,
-                                 String configVersion, boolean credentialsConfigured,
-                                 String serviceAccountEmail, String message) { }
+                                 String configVersion, boolean googleConnected,
+                                 boolean oauthConfigured, String message) { }
 
     public record CheckResponse(String spreadsheetId, String spreadsheetTitle, int headerRow, String configVersion,
                                 List<String> availableSheets, Map<String, String> suggestedMonthSheets,

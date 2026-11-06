@@ -17,6 +17,7 @@ final class PedidosYaReceiptParser {
     private static final Pattern KILOGRAM_QUANTITY_PATTERN = Pattern.compile("(?i)(\\d+(?:[\\.,]\\d+)?)\\s*kg\\b");
     private static final Pattern CHANGED_WEIGHT_PATTERN = Pattern.compile(
             "(?i)\\s+(\\d+(?:[.,]\\d+)?\\s*(?:kg|g)\\s*\\d+(?:[.,]\\d+)?\\s*kg)\\s*$");
+    private static final Pattern SERVICE_FEE_PATTERN = Pattern.compile("^(?:cargo|tarifa) de servicio\\b");
 
     private final ReceiptLineAnalyzer lineAnalyzer;
 
@@ -118,7 +119,44 @@ final class PedidosYaReceiptParser {
             pendingQuantityUncertain = false;
         }
 
+        appendServiceFee(lines, uncertainByLine, candidates, warnings);
         return new ParseResult(candidates, warnings);
+    }
+
+    private void appendServiceFee(List<String> lines, Map<Integer, Boolean> uncertainByLine,
+                                  List<Candidate> candidates, List<String> warnings) {
+        for (int index = 0; index < lines.size(); index++) {
+            String line = lineAnalyzer.clean(lines.get(index));
+            String normalized = lineAnalyzer.normalize(line);
+            if (!isServiceFeeLine(normalized)) continue;
+
+            String price = lineAnalyzer.firstMoneyValue(line).orElse(null);
+            int priceIndex = index;
+            if (price == null && index + 1 < lines.size()) {
+                String followingLine = lineAnalyzer.clean(lines.get(index + 1));
+                if (lineAnalyzer.isMoneyValue(followingLine)) {
+                    price = followingLine;
+                    priceIndex = index + 1;
+                }
+            }
+            if (price == null) {
+                warnings.add("Producto posible sin precio: " + line);
+                continue;
+            }
+
+            boolean uncertain = uncertainByLine.getOrDefault(index, false)
+                    || uncertainByLine.getOrDefault(priceIndex, false);
+            if (uncertain) warnings.add("Revisá la lectura OCR del cargo de servicio: " + line);
+            candidates.add(new Candidate(
+                    normalized.startsWith("cargo") ? "Cargo de servicio" : "Tarifa de servicio",
+                    price, "1", uncertain || lineAnalyzer.isAmbiguous(line, normalized), line));
+            // The order and payment summary can repeat the same fee under either label.
+            return;
+        }
+    }
+
+    private boolean isServiceFeeLine(String normalized) {
+        return SERVICE_FEE_PATTERN.matcher(normalized).find();
     }
 
     private int orderStart(List<String> lines) {
@@ -133,7 +171,8 @@ final class PedidosYaReceiptParser {
     private int orderEnd(List<String> lines, int start) {
         for (int index = start; index < lines.size(); index++) {
             String normalized = lineAnalyzer.normalize(lines.get(index));
-            if (normalized.matches("^(?:ver menos|ver mas|notas adicionales\\b.*|tu pago\\b.*|medios de pago\\b.*|detalles? sobre la entrega\\b.*)$")) {
+            if (lineAnalyzer.isProductFooter(normalized)
+                    || normalized.matches("^(?:ver menos|ver mas|notas adicionales\\b.*|tu pago\\b.*|medios de pago\\b.*|detalles? sobre la entrega\\b.*)$")) {
                 return index;
             }
         }
@@ -246,7 +285,8 @@ final class PedidosYaReceiptParser {
     }
 
     private boolean isInterfaceLine(String normalized) {
-        return normalized.matches("^(?:entregad[oa]\\b.*|compensacion\\b.*|te acreditamos\\b.*|(?:of )?repetir pedido\\b.*|ir al local|(?:q )?ayuda|opinar|ver menos|ver mas|notas adicionales\\b.*|hubo cambios\\b.*|detalle de los cambios\\b.*|cobro extra\\b.*|veras el cobro extra\\b.*|como veo mi cobro extra\\b.*)$");
+        return isServiceFeeLine(normalized)
+                || normalized.matches("^(?:entregad[oa]\\b.*|compensacion\\b.*|te acreditamos\\b.*|(?:of )?repetir pedido\\b.*|ir al local|(?:q )?ayuda|opinar|ver menos|ver mas|notas adicionales\\b.*|hubo cambios\\b.*|detalle de los cambios\\b.*|cobro extra\\b.*|veras el cobro extra\\b.*|como veo mi cobro extra\\b.*)$");
     }
 
     private Optional<LocatedPrice> findPriceInFollowingLines(List<String> lines, int startIndex, int end) {

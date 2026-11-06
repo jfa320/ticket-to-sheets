@@ -2,7 +2,27 @@
 
 El fixture sirve la UI fuente real y delega extracción, render de PDF y memoria a un backend Java aislado. Simula las respuestas OCR y Sheets, sin credenciales ni conexión a Google. Complementa los tests de contratos con motor simulado y las evaluaciones separadas del motor PaddleOCR real.
 
+## Ejecución automática
+
+Requiere Java 17, Node, Python 3.11 con Pillow, Playwright disponible como herramienta de desarrollo y Microsoft Edge en Windows (Chromium de Playwright en otros sistemas). No agrega npm ni un bundler al frontend. Si Playwright no está en la resolución habitual de Node, indicá la ruta absoluta del paquete ya instalado:
+
+```powershell
+$env:APP_PLAYWRIGHT_MODULE = 'C:/herramientas/playwright/node_modules/playwright'
+mvn package -DskipTests
+node scripts/browser_e2e.mjs
+# O incluirlo en todas las comprobaciones locales:
+./scripts/check.ps1 -Browser
+```
+
+`APP_PYTHON`, `APP_JAVA` y `APP_BROWSER_EXECUTABLE` permiten elegir los ejecutables; Python usa `.venv` por defecto. El script exige que 18081/18082 estén libres, crea un workspace nuevo en `logs/browser-e2e-<fecha>/` y arranca sus propios procesos sin ventanas. No copia datos personales ni usa el perfil del navegador. Bloquea las peticiones externas del navegador y detiene únicamente los procesos que inició.
+
+El recorrido comprueba extracción, cantidades, recortes, portapapeles real TSV con siete columnas, correcciones y reintento, descarga del respaldo, vista previa/cancelación/restauración, conflictos con prioridad local, categorías configuradas y recuperación de Sheets después de recargar sin duplicar filas. También comprueba un PDF digital con recorte y la cancelación durante el OCR, conservando la tabla anterior y permitiendo una extracción nueva. Las capturas de escritorio/móvil y logs quedan en el workspace ignorado. Un fallo devuelve código distinto de cero y guarda `failure.png` cuando el navegador llegó a abrirse.
+
+El flujo OAuth usa una ventana emergente real con respuesta de Google simulada, prueba desconexión, selección y cancelación de planilla, el cierre temporal del diálogo modal para usar Picker y la conservación de las filas del ticket. Las capturas `google-settings-desktop.png` y `google-settings-mobile.png` documentan el panel. No autentica cuentas reales ni prueba permisos remotos; eso requiere el alta de `docs/GOOGLE_SHEETS.md`.
+
 ## Preparar el entorno
+
+El ejecutor automático también prueba pegado real de una imagen desde el portapapeles, filtro de pendientes, marcar revisión con teclado y recorte de la tercera fila de un PDF de dos páginas. En el administrador comprueba que paginar/Escape conservan cambios, que descartar recupera el valor guardado y que guardar antes de cerrar persiste la edición. Los tests siguen usando OCR y Sheets simulados; el rendimiento y precisión del motor real se miden con `scripts/benchmark_local.py`.
 
 Desde la raíz del repositorio, con Python 3.11 y las dependencias OCR instaladas:
 
@@ -11,7 +31,7 @@ mvn package -DskipTests
 ./.venv/Scripts/python.exe scripts/browser_fixture.py
 ```
 
-El fixture escucha solo en `127.0.0.1:18082`, genera una imagen y un PDF de dos páginas en `test-data/browser-e2e/`, y admite únicamente el backend `127.0.0.1:18081`. En otra terminal PowerShell, desde la raíz:
+El fixture escucha solo en `127.0.0.1:18082`, genera una imagen, un PDF escaneado de dos páginas y `digital.pdf` con texto en `test-data/browser-e2e/`, y admite únicamente el backend `127.0.0.1:18081`. En otra terminal PowerShell, desde la raíz:
 
 ```powershell
 $fixtureRoot = (Get-Location).Path
@@ -38,6 +58,7 @@ Controles opcionales, desde otra terminal; afectan exclusivamente al fixture:
 ```powershell
 Invoke-RestMethod http://127.0.0.1:18082/__test__/control -Method Post -ContentType application/json -Body '{"failCorrections":1}'
 Invoke-RestMethod http://127.0.0.1:18082/__test__/control -Method Post -ContentType application/json -Body '{"loseAppend":true,"failStatus":1}'
+Invoke-RestMethod http://127.0.0.1:18082/__test__/control -Method Post -ContentType application/json -Body '{"ocrDelay":5}'
 Invoke-RestMethod http://127.0.0.1:18082/__test__/state
 ```
 

@@ -35,10 +35,13 @@ test-data/
 
 # Learned corrections (personal usage data, regenerated locally)
 data/corrections.json
+data/categories.json
+data/.learning-restore.json*
 data/sheets-config.json
 data/sheets-history.json
 data/local-history.json
 data/google-service-account.json
+data/google-oauth-tokens.json
 secrets/
 data/*.json.bak
 data/.*.tmp

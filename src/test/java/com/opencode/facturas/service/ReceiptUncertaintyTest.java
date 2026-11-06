@@ -12,6 +12,74 @@ class ReceiptUncertaintyTest {
     @TempDir Path directory;
     private final ObjectMapper mapper = new ObjectMapper();
 
+    @Test void repeatedRecoveredDescriptionsUseTheirOwnFollowingPriceAndUncertainty() {
+        var memory = new CorrectionMemory(mapper, directory.resolve("memory.json"));
+        memory.upsert("Comercio Prueba", "gal oreo leche 1l descuento", "Galletitas Oreo", "Oreo", "Otros");
+        String[] text = {"Comercio Prueba", "GAL OREO LECHE 1L DESCUENTO", "2400,00",
+                "GAL OREO LECHE 1L DESCUENTO", "2800,00"};
+        var lines = java.util.stream.IntStream.range(0, text.length).mapToObj(i ->
+                new OcrLine(text[i], 0, i == 4 ? .20 : .99, i * 40, 0, 400, i * 40 + 20)).toList();
+        var result = parser(memory).parse(new OcrResult("", lines, List.of(), "synthetic", 1.0));
+        assertThat(result.items()).extracting(item -> item.precioUnitario()).containsExactly("2400,00", "2800,00");
+        assertThat(result.items()).extracting(item -> item.estado()).containsExactly("LEARNED", "AMBIGUOUS");
+        assertThat(result.items()).allMatch(item -> item.memorizado());
+    }
+
+    @Test void recoveredMemoryNeverBorrowsTheNextProductsAmount() {
+        var memory = new CorrectionMemory(mapper, directory.resolve("memory.json"));
+        memory.upsert("Comercio Prueba", "gal oreo leche 1l descuento", "Galletitas Oreo", "Oreo", "Otros");
+        var result = parser(memory).parse("Comercio Prueba\nGAL OREO LECHE 1L DESCUENTO\nLECHE ENTERA 2800,00");
+        assertThat(result.items()).filteredOn(item -> item.memorizado()).singleElement().satisfies(item -> {
+            assertThat(item.precioUnitario()).isEmpty(); assertThat(item.estado()).isEqualTo("AMBIGUOUS");
+        });
+        assertThat(result.total()).isEqualTo("2800,00");
+    }
+
+    @Test void quantityFromPreviousRowKeepsLowConfidenceForBoxesAndFallbackLines() {
+        String[] text = {"Comercio Prueba", "Fecha 10/10/2026", "2 x 1000,00", "Leche entera 2000,00"};
+        var lines = java.util.stream.IntStream.range(0, text.length)
+                .mapToObj(i -> new OcrLine(text[i], 0, i == 2 ? .20 : .99, i * 40, 0, 400, i * 40 + 20)).toList();
+        var boxes = List.of(box(text[0], .99, 0, 0, 200), box(text[1], .99, 40, 0, 200),
+                box(text[2], .20, 80, 0, 200), box("Leche entera", .99, 120, 0, 180), box("2000,00", .99, 120, 300, 400));
+        var parser = parser(new CorrectionMemory(mapper, directory.resolve("memory.json")));
+        for (var ocr : List.of(new OcrResult(String.join("\n", text), lines, List.of(), "synthetic", 1.0),
+                new OcrResult(String.join("\n", text), List.of(), boxes, "synthetic", 1.0))) {
+            var result = parser.parse(ocr);
+            assertThat(result.items()).singleElement().satisfies(item -> {
+                assertThat(item.cantidad()).isEqualTo("2");
+                assertThat(item.precioUnitario()).isEqualTo("1000,00");
+                assertThat(item.estado()).isEqualTo("AMBIGUOUS");
+            });
+            assertThat(result.warnings()).anyMatch(w -> w.contains("OCR"));
+        }
+    }
+
+    @Test void memoryRecoveryKeepsUncertainPriceAndTheCurrentSourceSignature() {
+        var memory = new CorrectionMemory(mapper, directory.resolve("memory.json"));
+        memory.upsert("Comercio Prueba", "gal oreo leche 1l descuento", "Galletitas Oreo", "Oreo", "Otros");
+        var ocr = new OcrResult("", List.of(), List.of(box("Comercio Prueba", .99, 0, 0, 200),
+                box("GAL OREO LECHE 1L DESCUENTO", .99, 40, 0, 330),
+                box("2400,00", .20, 40, 400, 500)), "synthetic", 1.0);
+        var item = parser(memory).parse(ocr).items().get(0);
+        assertThat(item.memorizado()).isTrue();
+        assertThat(item.estado()).isEqualTo("AMBIGUOUS");
+        assertThat(item.precioUnitario()).isEqualTo("2400,00");
+        assertThat(item.fuentesOcr()).containsExactly(new ReceiptSource(1, List.of(1, 2)));
+    }
+
+    @Test void splitDescriptionAndPriceKeepUncertaintyFromEitherLine() {
+        var ocr = new OcrResult("", List.of(new OcrLine("Comercio Prueba", 0, .99, 0, 0, 300, 20),
+                new OcrLine("Leche entera", 0, .99, 40, 0, 200, 60),
+                new OcrLine("1200,00", 0, .20, 80, 0, 100, 100)), List.of(), "synthetic", 1.0);
+        assertThat(parser(new CorrectionMemory(mapper, directory.resolve("memory.json"))).parse(ocr).items())
+                .singleElement().extracting(item -> item.estado()).isEqualTo("AMBIGUOUS");
+    }
+
+    private OcrDetection box(String text, double confidence, double top, double left, double right) {
+        return new OcrDetection(text, confidence, List.of(List.of(left, top), List.of(right, top),
+                List.of(right, top + 20), List.of(left, top + 20)));
+    }
+
     private ReceiptParserService parser(CorrectionMemory memory) {
         return new ReceiptParserService(StoreNameMapper.empty(),
                 new BrandCatalog(mapper, directory.resolve("brands.json")), memory);

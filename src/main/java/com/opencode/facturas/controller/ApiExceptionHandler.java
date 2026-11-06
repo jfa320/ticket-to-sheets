@@ -3,7 +3,9 @@ package com.opencode.facturas.controller;
 import com.opencode.facturas.service.ExtractionBusyException;
 import com.opencode.facturas.service.CorrectionConflictException;
 import com.opencode.facturas.service.ExtractionCancelledException;
+import com.opencode.facturas.service.ExtractionTimeoutException;
 import com.opencode.facturas.service.OcrUnavailableException;
+import com.opencode.facturas.service.LearningConflictException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -16,6 +18,7 @@ import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
@@ -48,6 +51,11 @@ public class ApiExceptionHandler {
         return ResponseEntity.badRequest().body(errorBody("La solicitud contiene datos inválidos."));
     }
 
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<Map<String, String>> handleMissingParameter(MissingServletRequestParameterException ex) {
+        return ResponseEntity.badRequest().body(errorBody("La solicitud no incluye todos los parámetros requeridos."));
+    }
+
     @ExceptionHandler({IllegalArgumentException.class, MethodArgumentNotValidException.class, MethodArgumentTypeMismatchException.class,
             MaxUploadSizeExceededException.class})
     public ResponseEntity<Map<String, String>> handleBadRequest(Exception ex) {
@@ -67,8 +75,17 @@ public class ApiExceptionHandler {
                 .body(errorBody(ex.getMessage()));
     }
 
+    @ExceptionHandler(ExtractionTimeoutException.class)
+    public ResponseEntity<Map<String, String>> handleTimeout(ExtractionTimeoutException ex) {
+        return ResponseEntity.status(HttpStatus.REQUEST_TIMEOUT).body(errorBody(ex.getMessage()));
+    }
+
     @ExceptionHandler(CorrectionConflictException.class)
     public ResponseEntity<Map<String, String>> handleCorrectionConflict(CorrectionConflictException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(errorBody(ex.getMessage()));
+    }
+    @ExceptionHandler(LearningConflictException.class)
+    public ResponseEntity<Map<String, String>> handleLearningConflict(LearningConflictException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(errorBody(ex.getMessage()));
     }
 

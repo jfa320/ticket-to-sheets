@@ -1,5 +1,35 @@
 # Evaluación del OCR y de los productos extraídos
 
+## Objetivo de menos de 10 segundos
+
+El recorrido de producción usa lectura rápida por defecto (presupuesto OCR cooperativo de 8 s). Para medir el recorrido completo, incluyendo validación, OCR, parser y respuesta HTTP, se dispone de una instancia aislada con el motor real:
+
+```powershell
+mvn package
+./.venv/Scripts/python.exe scripts/benchmark_local.py test-data/independent-review-20261022/manifest.json --brands data/brands.json
+# Comparar una nueva ejecución contra el informe anterior, con las mismas referencias:
+./.venv/Scripts/python.exe scripts/benchmark_local.py RUTA_MANIFEST --brands data/brands.json --baseline-report RUTA_REPORT_JSON
+```
+
+Requiere modelos locales/dependencias OCR, Java y los puertos 18083/18084 libres. No usa correcciones, historial ni credenciales de la app habitual. `--brands` copia únicamente el catálogo indicado a su workspace; omitilo para un catálogo vacío. `--output` elige una carpeta nueva; por defecto queda en `logs/real-ocr-<fecha>/`. Los procesos propios se detienen al terminar. No imprime OCR ni nombres de comercios, y no escribe las referencias ni copia imágenes al repositorio versionado.
+
+El informe incluye las métricas existentes de productos, campos, total y fecha, hashes de casos, p50/p95/máximo y `latency_target`. El código de salida es distinto de cero si falla una solicitud o cualquiera alcanza 10 segundos. El arranque/precalentamiento de modelos se mide por disponibilidad del servicio y queda fuera del tiempo por ticket; la primera solicitud real sí se incluye. `--budget 90` permite medir el modo detallado y `--target-seconds` cambia el objetivo. No cambiar anotaciones para mejorar la puntuación. Una muestra local de siete tickets sirve para detectar regresiones, no demuestra precisión sobre todos los comercios y fotos posibles.
+
+## Banco sintético ampliado
+
+El generador admite `--challenge`: ocho tickets de calibración y ocho reservados, con productos y fechas distintos entre particiones. Incluye variantes completas, unidades separadas, cuatro filas por ticket con un producto repetido, una cantidad de 0,375 y otra de 2, rotación, inclinación, bajo contraste y desenfoque. Las referencias de producto y transcripciones se fijan antes de ejecutar OCR; no se derivan de las respuestas del parser.
+
+```powershell
+./.venv/Scripts/python.exe ocr/synthetic_corpus.py --challenge --output test-data/challenge-v1
+./.venv/Scripts/python.exe ocr/evaluate.py test-data/challenge-v1/manifest-challenge-calibration.json --output logs/challenge-calibration.json
+# Congelar los cambios antes de abrir los resultados reservados:
+./.venv/Scripts/python.exe ocr/evaluate.py test-data/challenge-v1/manifest-challenge-holdout.json --output logs/challenge-holdout.json
+```
+
+Anotar el commit o estado del código, Python/modelos, presupuesto OCR, equipo y número de repeticiones. Comparar únicamente informes con referencias idénticas. Después de inspeccionar errores reservados, esos casos pasan a ser conocidos: usarlos para ajustar reglas exige una nueva partición reservada para la siguiente medición. Este banco complementa las regresiones del parser y no sustituye fotos reales anonimizadas; no mide marcas ni comercios. No modificar memoria personal para mejorar sus resultados. Imágenes, transcripciones y referencias generadas permanecen en carpetas ignoradas.
+
+Los límites de tiempo por imagen y por PDF son distintos: `X-OCR-Search-Budget-Seconds` selecciona el perfil por página; el presupuesto global de PDF impide reiniciarlo indefinidamente. Una respuesta HTTP 408 se registra como caso fallido, sin interpretar productos parciales como aciertos.
+
 `ocr/evaluate.py` compara texto OCR crudo con transcripciones verificadas y productos extraídos con referencias por fila. Usa el backend local en `http://127.0.0.1:8080/api/receipts/extract`; el evaluador usa solo la biblioteca estándar de Python y no requiere publicar el puerto del OCR. Se pueden evaluar productos sin disponer de una transcripción textual completa.
 
 Las pruebas unitarias usan imágenes sintéticas y un motor simulado. No demuestran por sí solas que PaddleOCR reconozca mejor los tickets reales. Este procedimiento permite medirlo con los mismos archivos y las mismas transcripciones en ambos modos.

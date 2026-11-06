@@ -4,10 +4,30 @@ import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
 import java.util.Locale;
 import java.util.Optional;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 
 final class ReceiptAmounts {
 
     private static final Locale LOCALE_AR = Locale.forLanguageTag("es-AR");
+
+    static BigDecimal decimal(String value, boolean price) {
+        String clean = value == null ? "" : value.replaceAll("\\s", "");
+        if (price) clean = clean.replaceFirst("^\\$", "");
+        if (clean.length() > 64) throw new IllegalArgumentException("Cantidad o precio demasiado largo.");
+        if (price && clean.matches("[+-]?\\d{1,3}(\\.\\d{3})+(,\\d+)?")) {
+            clean = clean.replace(".", "").replace(',', '.');
+        } else if (clean.matches("[+-]?(?:\\d+(?:[.,]\\d+)?|[.,]\\d+)")) {
+            clean = clean.replace(',', '.');
+        } else {
+            throw new IllegalArgumentException("Cantidad y precio deben ser números válidos; usá 0,875 para cantidades y 1.234,56 para precios.");
+        }
+        return new BigDecimal(clean).stripTrailingZeros();
+    }
+
+    String format(BigDecimal amount) {
+        return amount.setScale(2, RoundingMode.HALF_UP).toPlainString().replace('.', ',');
+    }
 
     double parse(String value) {
         boolean hasCurrencySymbol = value.contains("$");

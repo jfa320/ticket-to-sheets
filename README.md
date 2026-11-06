@@ -2,10 +2,26 @@
 
 App local para subir una foto o PDF de un ticket, correr OCR gratis con PaddleOCR en Docker y devolver filas para copiar o cargar directamente en un Google Sheet configurable.
 
+## Lectura rápida
+
+La opción predeterminada **Rápida** busca resolver cada ticket en menos de 10 segundos. Hace una lectura completa, intenta otra orientación solo cuando no obtiene texto útil y relee un importe dudoso únicamente si queda margen para confirmarlo. Conserva las marcas de revisión cuando no puede confirmar una lectura. **Detallada** mantiene la búsqueda de variantes con un presupuesto de 90 segundos para fotos difíciles.
+
+El presupuesto rápido es de 8 segundos de OCR; no es un límite absoluto sobre una llamada nativa ya iniciada. La pantalla muestra el tiempo total observado. Los PDFs de varias páginas, las imágenes difíciles o un equipo ocupado pueden superar el objetivo. La preparación inicial de los modelos ocurre antes de que el OCR se anuncie listo.
+
+El motor usa hasta cuatro hilos de CPU y aceleración MKL-DNN. `OCR_CPU_THREADS` permite elegir entre 1 y 16; `OCR_ENABLE_MKLDNN=false` permite usar el motor compatible. Si la carga o el precalentamiento optimizado falla, se intenta el compatible automáticamente. Son parámetros del [motor PaddleOCR 2.x](https://github.com/PaddlePaddle/PaddleOCR/blob/main/docs/version2.x/ppocr/blog/inference_args.md).
+
+En lectura rápida, un JPEG validado se envía directamente al OCR: evita convertirlo a PNG y conserva su orientación EXIF. Las otras imágenes y páginas renderizadas de PDF mantienen la preparación habitual. `APP_OCR_SEARCH_BUDGET_SECONDS` configura el presupuesto predeterminado del backend; el selector web envía 8 o 90 segundos por solicitud.
+
 ## Que hace
+
+- conserva los atributos de los productos al expandir abreviaturas: tipo, sabor, presentación y unidades. La incertidumbre de cantidades y precios también se conserva al aplicar o recuperar memoria.
+- calcula totales con decimales exactos y el mismo redondeo en Java y JavaScript, incluidas cantidades fraccionarias y bonificaciones.
 
 - permite abrir el recorte de una fila con “Ver en imagen”, filtrar filas ambiguas pendientes y marcarlas como revisadas. Editar una fila reabre su revisión; el estado OCR y la memoria permanecen visibles.
 - ofrece “Administrar correcciones aprendidas”: búsqueda por comercio/texto, edición y eliminación individual. Los cambios afectan futuras extracciones. Si otra edición modificó la misma entrada, pide recargarla antes de guardar.
+- permite descargar y restaurar un respaldo de correcciones y marcas desde ese diálogo, con vista previa y prioridad para los datos locales.
+- muestra fase y página durante la extracción y permite cancelarla conservando el ticket anterior. También muestra recortes de PDFs con texto digital.
+- permite configurar categorías y reglas por producto/comercio desde un JSON local, manteniendo la edición libre por fila.
 
 ### Validación completa local
 
@@ -15,6 +31,8 @@ App local para subir una foto o PDF de un ticket, correr OCR gratis con PaddleOC
 ./scripts/check.ps1 -Python ./.venv/Scripts/python.exe
 # Además, validar Compose y construir las imágenes:
 ./scripts/check.ps1 -Docker
+# Con Playwright y navegador disponibles, sumar el recorrido E2E aislado:
+./scripts/check.ps1 -Browser
 ```
 
 Requiere Java 17/Maven, Node y Python **3.11** con `ocr/requirements.txt`. No instala dependencias. Falla ante comandos faltantes, errores o pruebas Python omitidas. Tanto `check.ps1` como `local.ps1` usan `-Python`, luego `APP_PYTHON`, luego `.venv` y finalmente Python del PATH. Una selección explícita inválida o una versión distinta de 3.11 produce un error claro. Docker es opcional y `-Docker` falla si no está instalado. También se comprueban los módulos locales incluidos por el Dockerfile; esta comprobación no ejecuta Docker.
@@ -31,6 +49,7 @@ Para medir precisión y tiempos, ver [la guía de evaluación](docs/OCR_EVALUATI
 
 ### Extracción y revisión
 
+- permite pegar una imagen del portapapeles con `Ctrl+V` (`⌘V` en Mac) sobre la página para dejarla seleccionada, igual que al elegir un archivo, y después presionar `Extraer datos`. Mantiene los mismos límites de carga. En campos editables y diálogos se conserva el pegado habitual; durante una extracción o carga a Sheets no se cambia el archivo
 - extrae texto de imagen o PDF con PaddleOCR
 - prueba primero la orientación con imágenes de hasta un megapíxel y 700 píxeles de lado corto, y concentra las mejoras en la más legible. Prefiere las lecturas completas a esas sondas; reutiliza lecturas de imágenes con píxeles idénticos
 - prioriza variantes que asocian productos e importes, reduciendo el puntaje de precios sueltos en tickets inclinados
@@ -42,6 +61,7 @@ Para medir precisión y tiempos, ver [la guía de evaluación](docs/OCR_EVALUATI
 - procesa los tickets largos en bloques solapados para conservar el detalle, reunificando coordenadas y detecciones repetidas del mismo renglón
 - detecta fecha y lugar de compra; admite fechas sin etiqueta, con `/`, `-` o `.`, además de las etiquetadas
 - reconoce el encabezado de PedidosYa `Entregado mié 30 de sept · 22:04 hs`, incluso separado por el OCR, con meses completos o abreviados; si falta el año usa el año actual (revisarlo en pedidos antiguos)
+- solo en PedidosYa, agrega el cargo o tarifa de servicio como una fila con cantidad 1 e importe leído del comprobante, incluido en el total y en la exportación; si falta el precio, avisa para revisión
 - avisa cuando el año de la fecha fue inferido; mantiene la regla del año actual y permite corregirlo antes de exportar
 - corrige confusiones `O`/`0` y sufijos OCR en presentaciones explícitas, como `1ke` → `1kg` o `8ogf` → `80gr`, conservando importes, cantidades y firma original
 - prioriza variantes OCR que conservan la fecha de entrega de Market y excluye compensaciones, cupones y botones de las filas de productos
@@ -60,7 +80,7 @@ Para medir precisión y tiempos, ver [la guía de evaluación](docs/OCR_EVALUATI
 - conserva el ticket actual y sus ediciones mientras procesa otro archivo; si la nueva extracción falla, mantiene el total, las salidas y la revisión OCR anteriores
 - avisa antes de cerrar o recargar la página si el ticket no se copió ni se cargó correctamente, o si después hubo cambios pendientes
 - cancela la extracción en curso al recargar o salir de la página; descarta el resultado anterior y permite procesar otra factura. Si PaddleOCR está dentro de una llamada nativa, espera su finalización y no inicia más pasadas ni páginas del trabajo cancelado
-- permite guardar un destino de Google Sheets y cargar las filas seleccionadas con un botón, mediante una cuenta de servicio
+- permite guardar un destino de Google Sheets y cargar las filas seleccionadas con un botón, con autorización OAuth de Google y selección de archivo
 - marca filas ambiguas y muestra advertencias completas cuando una línea no pudo confirmarse
 - conserva la baja confianza de productos, cantidades y precios de PedidosYa; una fila puede mostrar **Ambiguo** y **Memorizado** a la vez, porque aprender el nombre no confirma el precio del ticket nuevo
 - aprende de tus correcciones (marca, categoría y descripción) y las aplica en el próximo ticket del mismo comercio
@@ -110,11 +130,26 @@ En Windows, con Java/Maven y Python con las dependencias OCR instaladas, el arra
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local.ps1 -Action Stop
+# Abrir el navegador al terminar el arranque en 8080:
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local.ps1 -OpenBrowser
 ```
 
 El arranque espera `ocrReady`, conserva los logs en `logs/` y ejecuta una copia del JAR en `logs/runtime/`, separada de `target/`. Así una nueva compilación no bloquea ni altera el archivo en ejecución. Detiene primero las instancias antiguas que ejecutaban directamente `target/` y comprueba la respuesta HTTP antes de anunciar que la app está lista. Reutiliza un OCR que todavía está arrancando y detecta si los procesos recién lanzados terminan con error. La espera de modelos es de hasta 300 segundos; se puede ampliar, por ejemplo, con `-OcrStartupTimeoutSec 600`.
 
+El arranque usa siempre 8080 por defecto, aunque una ejecución anterior haya usado otro puerto. Si está ocupado por un proceso ajeno, informa el conflicto sin cambiar de puerto ni detener ese proceso. `-Port` permite elegir otro explícitamente. El puerto de la instancia se guarda en `logs/app.port` únicamente para que el apagado la encuentre. `-OpenBrowser` abre la URL correcta cuando la app está lista. Los accesos directos pueden delegar la apertura al script con esta opción.
+
+La URL de retorno de Google usa el puerto elegido (`http://localhost:<puerto>/api/sheets/oauth/callback`), salvo que se indique `APP_GOOGLE_REDIRECT_URI`. Para conectar Google en otro puerto, registrá esa URL y su origen en la configuración de Google siguiendo [la guía de Sheets](docs/GOOGLE_SHEETS.md). Si configurás `APP_GOOGLE_REDIRECT_URI`, su puerto debe coincidir con el de la app.
+
 En Windows, las rutas de modelos PaddleOCR usan el nombre corto de la caché cuando el perfil contiene acentos, sin cambiar `HOME` ni `USERPROFILE`. Se reutilizan los modelos descargados. Si Windows no dispone de un nombre corto utilizable, el OCR informa el problema en el log.
+
+Para permitir acceso desde otro dispositivo de la red local, iniciá la app nativa con:
+
+```powershell
+$env:SERVER_ADDRESS = '0.0.0.0'
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local.ps1
+```
+
+Abrí `http://<IP-local-de-la-PC>:8080` desde un dispositivo de la misma red y permití TCP 8080 en el firewall solo desde esa subred. El OCR permanece en `127.0.0.1:5000`. La extracción y los reintentos de Sheets funcionan por HTTP local sin depender de `crypto.randomUUID` ni de `crypto.subtle`. Los botones de copiar usan una alternativa por selección de texto si el navegador restringe el portapapeles moderno en HTTP. Si también bloquea esa alternativa, se informa el error y se puede seleccionar y copiar el texto de salida manualmente.
 
 ```bash
 mvn test
@@ -175,15 +210,21 @@ La imagen corresponde a la variante procesada por el OCR, por lo que puede estar
 
 ## Conexión con Google Sheets
 
-La [guía de configuración](docs/GOOGLE_SHEETS.md) explica cómo habilitar Google Sheets API, crear la cuenta de servicio, guardar el JSON local y compartir la planilla con esa cuenta como Editor. Después abrí el engranaje de la aplicación, guardá la URL o ID, el año de la planilla y la fila de encabezados, y comprobá la conexión. Podés asociar meses a pestañas con nombres personalizados.
+La [guía de configuración](docs/GOOGLE_SHEETS.md) explica el alta inicial del cliente OAuth y Google Picker en Google Cloud. Después abrí el engranaje, pulsá **Conectar con Google**, aceptá los permisos y usá **Elegir planilla de Google**. Guardá el año y la fila de encabezados y comprobá la conexión. Podés asociar meses a pestañas con nombres personalizados. Solo se solicita `drive.file`, para los archivos autorizados con el selector.
 
 La plantilla de compras usa encabezados en la fila 2: las siete columnas exportadas en A:G, `Precio total` en H y `Comentarios` en I. La carga calcula H como cantidad × precio unitario, conserva I y los resúmenes laterales y almacena números y fechas como valores de hoja de cálculo. La fecha de las filas seleccionadas propone el mes de destino; podés elegir otra pestaña para cargar tickets atrasados sin cambiar sus fechas.
 
-El destino se guarda en `data/sheets-config.json`. El archivo de credenciales predeterminado es `data/google-service-account.json`; ambos están ignorados por Git y excluidos del contexto de build de Docker. El token de Google permanece en memoria del backend. Cada carga lleva un identificador para reconocer reintentos y evitar duplicados de la misma operación. Si se pierde la respuesta, la sesión conserva el identificador, destino y huella del intento, sin guardar productos, imágenes ni texto OCR. Tras recargar, al volver a enviar los mismos datos se comprueba primero si ya quedaron guardados. Si los datos cambiaron, la pantalla pide revisar la carga anterior antes de continuar. Hace falta permitir almacenamiento de sesión en el navegador.
+El destino se guarda en `data/sheets-config.json`. La conexión persistente se guarda en `data/google-oauth-tokens.json`; ambos archivos están ignorados por Git y excluidos del contexto de build de Docker. El token de acceso permanece en memoria del backend y se entrega temporalmente al navegador solo para Google Picker; el token de renovación y el secreto OAuth permanecen en el backend. **Desconectar Google** borra la conexión local y solicita revocar la autorización. Cada carga lleva un identificador para reconocer reintentos y evitar duplicados de la misma operación. Si se pierde la respuesta, la sesión conserva el identificador, destino y huella del intento, sin guardar productos, imágenes ni texto OCR. Tras recargar, al volver a enviar los mismos datos se comprueba primero si ya quedaron guardados. Si los datos cambiaron, la pantalla pide revisar la carga anterior antes de continuar. Hace falta permitir almacenamiento de sesión en el navegador.
 
 ## Aprendizaje de correcciones
 
 En fotos inclinadas, el parser ajusta las posiciones de las cajas OCR antes de asociar nombres y precios. El listado termina en subtotal/total/recibido para no convertir el pie fiscal o el pago en productos. Admite decimales OCR como `3400,C0` y conserva la cantidad fraccionaria cuando el importe de línea es legible aunque falle el precio unitario. Si reconstruye un multiplicador sin `×`, la fila queda para revisión. Una diferencia con un total OCR legible se informa como advertencia; el total de la app siempre se calcula con las filas y descuentos reconocidos.
+
+También reconoce por estructura los tickets que imprimen primero el código de barras y los importes, y debajo la descripción. Admite código/importes separados en varias líneas, cantidades como `2X1500.00`, separadores argentinos o internacionales y alícuotas entre paréntesis. Conserva productos repetidos y las zonas OCR de todo el bloque para **Ver en imagen**. El contador `Artículos: 18.00` cierra el listado y no se convierte en un producto.
+
+Cuando el OCR pega un código EAN de 8 o 13 dígitos a la cantidad (`40000000000012X1500.00`), los separa antes de interpretar el multiplicador. Las reglas genéricas no admiten cadenas largas como cantidades. Si el OCR pierde el separador decimal del unitario pero conserva el importe final, usa ese importe y la cantidad legible y pide revisión.
+
+Si cantidad × precio unitario no coincide con el importe de línea, conserva ese importe y marca la fila para revisión. Si falta el precio de un bloque, conserva el producto con el precio vacío para completarlo o excluirlo antes de cargarlo en Sheets. Los códigos con importes sin descripción y las líneas descriptivas sin precio dentro del listado generan una advertencia de **Extracción parcial**. Revisá esas advertencias incluso si el total coincide: la suma por sí sola no confirma las asociaciones entre productos y precios.
 
 Además de las correcciones manuales, podés usar las compras que ya registraste en Google Sheets. Tras guardar y comprobar el destino, pulsá **Actualizar historial**. Se leen las cuatro primeras columnas de las pestañas compatibles del mismo archivo: descripción, marca, comercio y categoría. El catálogo se guarda en `data/sheets-history.json`, ignorado por Git y persistido en el volumen local de Docker.
 
@@ -207,18 +248,43 @@ Actualizá el historial de Sheets cuando quieras incorporar nuevas compras o cor
 - Solo se aprenden marca, categoria y descripcion. Precio y fecha siempre vienen del ticket actual.
 - `ALMACEN` / `ALMACÉN` es el comodín de productos cargados manualmente por el supermercado: se exporta siempre como `Almacén`, marca `Genérico`, con el precio de su propia fila. Se conservan las apariciones repetidas y no se reemplaza con nombres o marcas del historial o de la memoria.
 
+## Respaldo del aprendizaje
+
+En **Administrar correcciones aprendidas**, **Descargar respaldo** genera un JSON con correcciones y marcas. Para recuperarlo, seleccioná el archivo, revisá la cantidad de datos nuevos y diferencias, y elegí **Restaurar aprendizaje**. Cancelar la vista previa no escribe archivos. Las entradas locales tienen prioridad; la restauración agrega las nuevas sin eliminar ni reemplazar las existentes. Si la memoria cambia después de la vista previa, hay que seleccionar y revisar el respaldo otra vez.
+
+El formato tiene versión y admite archivos de hasta 16 MB y 10.000 entradas por lista. El servidor publica los límites y valida también la exportación; el navegador comprueba los bytes del archivo final antes de descargarlo. Si se superan, informa el problema sin producir un respaldo incompleto. Se valida antes de escribir; no incluye credenciales, destino de Sheets, precios, fechas de compra ni imágenes. Conservá el respaldo como información personal: contiene nombres de productos y comercios. Una restauración interrumpida recupera el estado anterior al reiniciar, mediante un diario local ignorado por Git.
+
+Si hay ediciones administrativas sin guardar, buscar, paginar, eliminar o cerrar ofrece **Guardar y continuar**, **Descartar y continuar** o **Seguir editando**. Escape conserva la misma protección y recargar la página muestra el aviso habitual del navegador. Las confirmaciones de cancelación tienen un tiempo máximo de espera; si falla la red, se conserva el UUID para reintentar sin crear otro trabajo.
+
+Las correcciones pueden ser parciales: dejá un campo vacío para conservar el valor del ticket nuevo. Hay que mantener al menos una corrección de descripción, marca o categoría; para quitar toda la entrada, usá **Eliminar**.
+
+## Categorías locales
+
+Copiá `src/main/resources/category-defaults.json` a `data/categories.json` y editá esa copia. No hace falta cambiar Java ni reiniciar: el backend relee los cambios en la siguiente extracción; recargá la página para actualizar las sugerencias de la tabla. En Docker el archivo usa el volumen `./data:/app/data`. `APP_CATEGORIES_PATH` permite elegir otra ruta.
+
+`categories` define sugerencias, `stores` asocia comercios con categorías y `fallback` se usa cuando no hay coincidencia. `productRules` admite reglas en orden; alcanza con que una palabra o frase completa de `keywords` aparezca en la descripción. `store` es opcional y restringe la regla a ese comercio normalizado. Ejemplo:
+
+```json
+"productRules": [
+  {"store": "Local Prueba", "category": "Lácteos", "keywords": ["leche", "yogur"]}
+]
+```
+
+La primera regla aplicable tiene prioridad sobre la categoría del comercio. Memoria e historial siguen completando las categorías que ya aprendieron. La tabla acepta categorías escritas libremente; las sugerencias no limitan el campo. Un archivo inválido muestra un error y debe corregirse para continuar extrayendo.
+
 ## Límites de archivos
 
 - El tamaño máximo de carga es 20 MB.
 - Las imágenes se validan antes de decodificarlas: máximo 20 megapíxeles y 10.000 píxeles por lado.
 - Los PDF admiten hasta 20 páginas. Cada página se limita a 20 megapíxeles al renderizarse a 300 DPI y se procesa de a una para no mantener todas las imágenes en memoria.
+- Cada PDF tiene un presupuesto total de 300 segundos, configurable con `app.pdf.processing-budget-seconds` o `APP_PDF_PROCESSING_BUDGET_SECONDS` (1–3600). El tiempo restante se comparte entre páginas y se comunica al OCR sin aumentar su presupuesto por página. Es cooperativo: una llamada nativa ya iniciada puede sobrepasarlo. Al agotarse se responde HTTP 408 sin devolver productos parciales; dividí el PDF o aumentá el presupuesto. El ticket anterior se conserva en pantalla.
 - El formato se comprueba por el contenido del archivo, no solo por el nombre. PDF cifrados, dañados o con dimensiones superiores al límite se rechazan con un mensaje.
 - Los límites de imagen y PDF se pueden ajustar en `application.properties` (`app.upload.*` y `app.pdf.*`).
 
 ## Limites actuales
 
-- la marca se estima a partir del inicio de la descripcion
-- la categoria base se infiere por comercio conocido y usa `Supermercado` como fallback
+- las marcas conocidas se buscan también después del nombre genérico del producto, con límites de palabra; las aproximaciones dudosas siguen requiriendo revisión
+- la categoría base usa reglas locales por producto/comercio y `Supermercado` como fallback predeterminado
 - la cantidad se lee desde multiplicadores o columnas OCR cuando son claras; si no hay evidencia confiable, queda en `1`
 - la corrección geométrica requiere evidencia suficiente de bordes del papel o renglones; las fotos muy borrosas, con papel curvado o contenido tapado pueden seguir perdiendo texto
 - el primer build de Docker puede tardar porque descarga la imagen y los modelos de OCR
@@ -236,5 +302,6 @@ Actualizá el historial de Sheets cuando quieras incorporar nuevas compras o cor
 
 ## Mejoras faciles para despues
 
-- ampliar el banco de evaluación con más transcripciones sintéticas o anonimizadas
-- permitir configurar categorías desde archivos locales
+- ampliar el banco de evaluación con fotos reales anonimizadas e independientes. El banco sintético ampliado ya incluye 16 casos con atributos, unidades separadas, productos repetidos, pesos y degradaciones; ver `docs/OCR_EVALUATION.md`.
+
+Los logs normales registran tiempos, estados y cantidades de filas, sin texto OCR, comercio, fecha ni total de compra. `APP_OCR_DEBUG=true` habilita archivos de diagnóstico sensibles en `debug/`; mantenelos fuera de Git.

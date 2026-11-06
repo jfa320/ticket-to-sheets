@@ -1,5 +1,15 @@
 import {COLUMNS, parseLocalizedNumber} from './receipt-model.mjs';
 
+function rowAction(label, rowNumber, icon) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.title = label;
+    button.setAttribute('aria-label', `${label}, fila ${rowNumber}`);
+    // Los trazos SVG son constantes locales; los datos del ticket nunca se insertan como HTML.
+    button.innerHTML = `<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>`;
+    return button;
+}
+
 export function renderDiscounts(discounts, panel, list, onChange) {
     list.replaceChildren();
     panel.classList.toggle('hidden', discounts.length === 0);
@@ -56,7 +66,11 @@ export function renderItems(items, body, {onEdit, onSelect, onRemove, onReview, 
             onEdit(item, field, value);
             row.querySelector('.status-reviewed')?.remove();
             const toggle = row.querySelector('[data-review-toggle]');
-            if (toggle) { toggle.textContent = 'Marcar revisada'; toggle.setAttribute('aria-pressed', 'false'); }
+            if (toggle) {
+                toggle.title = 'Marcar revisada';
+                toggle.setAttribute('aria-label', `Marcar revisada, fila ${index + 1}`);
+                toggle.setAttribute('aria-pressed', 'false');
+            }
         }
         row.classList.toggle('ambiguous-row', item.estado === 'AMBIGUOUS');
         row.classList.toggle('excluded-row', item.usar === false);
@@ -82,6 +96,7 @@ export function renderItems(items, body, {onEdit, onSelect, onRemove, onReview, 
             if (field === 'categoria') {
                 const input = document.createElement('input');
                 input.type = 'text';
+                input.setAttribute('list', 'categorySuggestions');
                 input.className = 'editable-input';
                 input.value = item[field] ?? '';
                 input.setAttribute('aria-label', `${label}, fila ${index + 1}`);
@@ -126,27 +141,30 @@ export function renderItems(items, body, {onEdit, onSelect, onRemove, onReview, 
 
         const actionCell = document.createElement('td');
         actionCell.dataset.label = 'Acciones';
+        const actions = document.createElement('div');
+        actions.className = 'row-actions';
         if (onReview) {
-            const review = document.createElement('button');
-            review.type = 'button'; review.textContent = 'Ver en imagen'; review.className = 'row-review';
+            const review = rowAction('Ver en imagen', index + 1,
+                '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>');
+            review.className = 'row-review';
             review.disabled = !canReview?.(item); review.setAttribute('aria-label', `Ver fila ${index + 1} en la imagen`);
-            review.title = review.disabled ? 'No hay coordenadas de imagen para esta fila.' : 'Comparar texto, cantidad y precio con el recorte';
-            review.addEventListener('click', () => onReview(item)); actionCell.append(review);
+            review.title = review.disabled ? 'No hay coordenadas de imagen para esta fila.' : 'Ver en imagen';
+            review.addEventListener('click', () => onReview(item)); actions.append(review);
         }
         if (onReviewed && item.estado === 'AMBIGUOUS') {
-            const reviewed = document.createElement('button');
-            reviewed.type = 'button'; reviewed.textContent = item.revisado ? 'Reabrir revisión' : 'Marcar revisada';
+            const reviewed = rowAction(item.revisado ? 'Reabrir revisión' : 'Marcar revisada', index + 1,
+                '<path d="m5 12 4 4L19 6"/>');
             reviewed.dataset.reviewToggle = 'true';
             reviewed.setAttribute('aria-pressed', String(Boolean(item.revisado)));
-            reviewed.addEventListener('click', () => onReviewed(item)); actionCell.append(reviewed);
+            reviewed.addEventListener('click', () => onReviewed(item)); actions.append(reviewed);
         }
-        const removeButton = document.createElement('button');
-        removeButton.type = 'button';
+        const removeButton = rowAction('Eliminar', index + 1,
+            '<path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6"/>');
         removeButton.className = 'remove-row';
-        removeButton.textContent = 'Eliminar';
         removeButton.setAttribute('aria-label', `Eliminar fila ${index + 1}`);
         removeButton.addEventListener('click', () => onRemove(item));
-        actionCell.append(removeButton);
+        actions.append(removeButton);
+        actionCell.append(actions);
         row.append(actionCell);
         body.append(row);
     });

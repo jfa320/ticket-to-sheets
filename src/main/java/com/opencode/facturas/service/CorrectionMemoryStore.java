@@ -17,6 +17,7 @@ class CorrectionMemoryStore {
     }
 
     List<CorrectionMemory.Entry> load() {
+        LearningRestoreTransaction.recover(objectMapper, memoryPath.toAbsolutePath().getParent());
         MemoryData data = AtomicJsonFile.loadOrRecover(
                 objectMapper,
                 memoryPath,
@@ -25,6 +26,7 @@ class CorrectionMemoryStore {
         );
         return data == null || data.entries() == null ? List.of() : data.entries();
     }
+    Path path() { return memoryPath; }
 
     void save(List<CorrectionMemory.Entry> entries) {
         try {

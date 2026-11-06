@@ -794,15 +794,69 @@ th {
     margin-top: 12px;
 }
 
-.remove-row {
-    margin: 0;
-    padding: 8px 12px;
-    font-size: 0.8rem;
-    background: var(--danger);
+.row-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: max-content;
 }
 
-.remove-row:hover {
-    background: #6f2e27;
+.row-actions button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 32px;
+    min-height: 32px;
+    height: 32px;
+    margin: 0;
+    padding: 7px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    color: var(--accent-strong);
+    background: var(--panel);
+    box-shadow: none;
+    line-height: 1;
+}
+
+.row-actions button svg {
+    flex: 0 0 auto;
+    pointer-events: none;
+}
+
+.row-actions button:hover:not(:disabled),
+.row-actions button[aria-pressed="true"] {
+    border-color: var(--accent);
+    background: var(--bg);
+    transform: none;
+}
+
+.row-actions .remove-row {
+    border-color: transparent;
+    color: var(--danger);
+    background: transparent;
+}
+
+.row-actions .remove-row:hover {
+    border-color: #fecaca;
+    background: #fef2f2;
+}
+
+.row-actions button:disabled {
+    color: var(--muted);
+    background: transparent;
+}
+
+@media (pointer: coarse), (max-width: 720px) {
+    .row-actions {
+        gap: 8px;
+    }
+
+    .row-actions button {
+        width: 44px;
+        min-height: 44px;
+        height: 44px;
+    }
 }
 
 .output-header {
@@ -1150,6 +1204,10 @@ textarea {
         letter-spacing: 0.03em;
     }
 
+    td[data-label="Acciones"] {
+        grid-template-columns: minmax(0, 1fr) max-content;
+    }
+
     .editable-cell {
         min-width: 0;
     }
@@ -1187,7 +1245,6 @@ textarea {
 }
 .review-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
 .status-reviewed { background: #d1fae5; color: #065f46; }
-td[data-label="Acciones"] button { display: block; margin: 8px 0; min-height: 44px; }
 .corrections-dialog { width: min(760px, calc(100% - 24px)); max-height: 90dvh; padding: 24px; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); color: var(--ink); }
 .corrections-dialog::backdrop { background: rgba(15, 23, 42, .42); }
 .corrections-dialog fieldset { border: 1px solid var(--line); border-radius: 12px; min-width: 0; padding: 16px; }
@@ -1196,3 +1253,20 @@ td[data-label="Acciones"] button { display: block; margin: 8px 0; min-height: 44
 .corrections-list { display: grid; gap: 16px; margin-bottom: 16px; }
 .correction-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .corrections-dialog .helper { overflow-wrap: anywhere; }
+.extraction-progress { padding: 14px 16px; margin-top: 12px; border: 1px solid var(--line); border-radius: 12px; }
+.extraction-progress p { margin: 0 0 8px; font-weight: 700; }
+.extraction-progress progress { display: block; width: 100%; height: 12px; accent-color: var(--accent); margin-bottom: 8px; }
+.extraction-progress small { color: var(--muted); }
+.learning-backup-panel { margin: 16px 0; padding: 12px; border: 1px solid var(--line); border-radius: 12px; }
+.learning-backup-panel summary { cursor: pointer; font-weight: 700; }
+.learning-backup-panel summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }
+.learning-backup { margin-top: 12px; min-width: 0; }
+.learning-backup > button { margin-bottom: 12px; }
+.learning-backup label { margin-top: 12px; }
+.learning-backup p, .learning-backup li { overflow-wrap: anywhere; }
+.unsaved-notice { border: 2px solid var(--warning-ink); border-radius: 12px; padding: 12px; margin: 16px 0; }
+.unsaved-notice[hidden] { display:none; }
+.unsaved-notice p { margin-top:0; font-weight:700; }
+.unsaved-notice fieldset { border:0; margin:0; padding:0; }
+.reading-mode { display:flex; align-items:center; gap:8px; font-weight:700; }
+.reading-mode select { min-height:44px; padding:8px; border:1px solid var(--line); border-radius:8px; color:var(--ink); background:var(--panel); font:inherit; }

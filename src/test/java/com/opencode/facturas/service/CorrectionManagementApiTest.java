@@ -15,6 +15,16 @@ import static org.mockito.Mockito.*;
 
 class CorrectionManagementApiTest {
     @TempDir Path directory;
+    @Test void acceptsAMeaningfulPartialEditWithAnEmptyBrand() throws Exception {
+        var mapper=new ObjectMapper();var memory=new CorrectionMemory(mapper,directory.resolve("memory.json"));
+        memory.upsert("Local","leche","Leche","","");var entry=memory.list("",0,25).entries().get(0);
+        var mvc=MockMvcBuilders.standaloneSetup(new CorrectionController(memory,mock(BrandCatalog.class)))
+                .setControllerAdvice(new ApiExceptionHandler()).build();
+        mvc.perform(put("/api/corrections").contentType(MediaType.APPLICATION_JSON)
+            .content(mapper.writeValueAsString(new com.opencode.facturas.model.CorrectionManagement.Edit("Local","leche",entry.version(),"Leche corregida","",""))))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.marca").value(""))
+                .andExpect(jsonPath("$.descripcion").value("Leche corregida"));
+    }
     @Test void listsEditsAndDeletesWithValidationAndConflictProtection() throws Exception {
         var mapper = new ObjectMapper();
         var memory = new CorrectionMemory(mapper,directory.resolve("memory.json"));

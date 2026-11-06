@@ -1,0 +1,32 @@
+{
+  "name": "product-identity",
+  "split": "development",
+  "provenance": "Texto ficticio; regresión de dominio, no fotografía privada ni conjunto reservado",
+  "ocr": {
+    "text": "MERCADO FICTICIO\nFecha 12/08/2026\nSALSA DE TOMATE 500 G 900,00\nPAPEL ALUMINIO 10M 1500,00\nHARINA INTEGRAL 1KG 800,00\nTOTAL 3200,00",
+    "lines": [],
+    "detections": []
+  },
+  "expected": {
+    "storeName": "Mercado Ficticio",
+    "date": "12/8/2026",
+    "total": "3200,00",
+    "items": [
+      {
+        "description": "Salsa De Tomate 500 G",
+        "quantity": "1",
+        "unitPrice": "900,00"
+      },
+      {
+        "description": "Papel Aluminio 10m",
+        "quantity": "1",
+        "unitPrice": "1500,00"
+      },
+      {
+        "description": "Harina Integral 1kg",
+        "quantity": "1",
+        "unitPrice": "800,00"
+      }
+    ]
+  }
+}

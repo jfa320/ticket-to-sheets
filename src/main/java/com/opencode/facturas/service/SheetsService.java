@@ -34,10 +34,10 @@ public class SheetsService {
     private static final int MAX_SCAN_ROWS = 100000;
     private final ObjectMapper mapper;
     private final SheetsConfigStore config;
-    private final GoogleServiceAccountAuth auth;
+    private final GoogleOAuthService auth;
     private final GoogleSheetsClient client;
 
-    public SheetsService(ObjectMapper mapper, SheetsConfigStore config, GoogleServiceAccountAuth auth,
+    public SheetsService(ObjectMapper mapper, SheetsConfigStore config, GoogleOAuthService auth,
                          GoogleSheetsClient client) {
         this.mapper = mapper;
         this.config = config;
@@ -217,10 +217,10 @@ public class SheetsService {
     }
 
     private ConfigResponse response(Settings settings) {
-        GoogleServiceAccountAuth.CredentialStatus status = auth.status();
+        GoogleOAuthService.Status status = auth.status();
         return new ConfigResponse(settings.spreadsheetId(), SheetsConfigStore.spreadsheetUrl(settings.spreadsheetId()),
                 settings.year(), settings.headerRow(), settings.monthSheets(), config.legacySheetName(), config.version(),
-                status.configured(), status.email(), status.message());
+                status.connected(), status.configured(), status.message());
     }
 
     private Settings configuredSettings() {
@@ -335,21 +335,7 @@ public class SheetsService {
     }
 
     static BigDecimal number(String value, boolean price) {
-        String clean = value == null ? "" : value.replaceAll("\\s", "");
-        if (price) {
-            clean = clean.replaceFirst("^\\$", "");
-        }
-        if (clean.length() > 64) {
-            throw new IllegalArgumentException("Cantidad o precio demasiado largo.");
-        }
-        if (price && clean.matches("[+-]?\\d{1,3}(\\.\\d{3})+(,\\d+)?")) {
-            clean = clean.replace(".", "").replace(',', '.');
-        } else if (clean.matches("[+-]?(?:\\d+(?:[.,]\\d+)?|[.,]\\d+)")) {
-            clean = clean.replace(',', '.');
-        } else {
-            throw new IllegalArgumentException("Cantidad y precio deben ser números válidos; usá 0,875 para cantidades y 1.234,56 para precios.");
-        }
-        BigDecimal number = new BigDecimal(clean).stripTrailingZeros();
+        BigDecimal number = ReceiptAmounts.decimal(value, price);
         if ((!price && number.signum() < 0) || number.abs().compareTo(new BigDecimal("1000000000")) > 0) {
             throw new IllegalArgumentException("La cantidad no puede ser negativa; el máximo absoluto por campo es 1.000.000.000.");
         }
@@ -412,7 +398,7 @@ public class SheetsService {
             if (!protection.path("warningOnly").asBoolean(false)
                     && !protection.path("requestingUserCanEdit").asBoolean(false)
                     && intersects(protection.path("range"), firstRowIndex, endRowIndex)) {
-                throw new IllegalArgumentException("El rango de carga está protegido. Permití editar A:H a la cuenta de servicio.");
+                throw new IllegalArgumentException("El rango de carga está protegido. Permití editar A:H a tu cuenta de Google.");
             }
         }
     }

@@ -16,7 +16,7 @@ class GoogleSheetsClientTest {
     private static final String ID = "synthetic_spreadsheet_id_1234567890";
 
     @Test void usesFixedGoogleEndpointAndConfiguredTimeout() throws Exception {
-        GoogleServiceAccountAuth auth = mock(GoogleServiceAccountAuth.class);
+        GoogleOAuthService auth = mock(GoogleOAuthService.class);
         SheetsHttpTransport transport = mock(SheetsHttpTransport.class);
         when(auth.accessToken()).thenReturn("synthetic-token");
         when(transport.send(any())).thenReturn(new SheetsHttpTransport.Response(200, "{}"));
@@ -31,7 +31,7 @@ class GoogleSheetsClientTest {
     }
 
     @Test void neverAutomaticallyRetriesAnUnconfirmedWrite() throws Exception {
-        GoogleServiceAccountAuth auth = mock(GoogleServiceAccountAuth.class);
+        GoogleOAuthService auth = mock(GoogleOAuthService.class);
         SheetsHttpTransport transport = mock(SheetsHttpTransport.class);
         when(auth.accessToken()).thenReturn("synthetic-token");
         when(transport.send(any())).thenThrow(new IOException("synthetic-sensitive upstream error"));
@@ -42,7 +42,7 @@ class GoogleSheetsClientTest {
     }
 
     @Test void historyReadsEvaluatedValuesFromAnExplicitBoundedRange() throws Exception {
-        GoogleServiceAccountAuth auth = mock(GoogleServiceAccountAuth.class);
+        GoogleOAuthService auth = mock(GoogleOAuthService.class);
         SheetsHttpTransport transport = mock(SheetsHttpTransport.class);
         when(auth.accessToken()).thenReturn("synthetic-token");
         when(transport.send(any())).thenReturn(new SheetsHttpTransport.Response(200, "{}"));
@@ -56,7 +56,7 @@ class GoogleSheetsClientTest {
     }
 
     @Test void invalidatesExpiredTokenAndSanitizesPermissionFailure() throws Exception {
-        GoogleServiceAccountAuth auth = mock(GoogleServiceAccountAuth.class);
+        GoogleOAuthService auth = mock(GoogleOAuthService.class);
         SheetsHttpTransport transport = mock(SheetsHttpTransport.class);
         when(auth.accessToken()).thenReturn("synthetic-token");
         when(transport.send(any())).thenReturn(new SheetsHttpTransport.Response(401, "synthetic-secret"))

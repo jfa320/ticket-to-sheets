@@ -3,14 +3,17 @@ import {
     calculateSummary, discountValidationErrors
 } from './receipt-model.mjs';
 import {saveCorrections, validateFile} from './receipt-api.mjs?v=2';
-import {createReceiptExtraction} from './receipt-extraction.mjs';
+import {createReceiptExtraction} from './receipt-extraction.mjs?v=2';
 import {createCorrectionSaver} from './receipt-corrections.mjs?v=2';
-import {renderItems, renderWarnings, renderDiscounts, markInvalidCells} from './receipt-view.mjs';
+import {renderItems, renderWarnings, renderDiscounts, markInvalidCells} from './receipt-view.mjs?v=2';
 import {createOcrReview} from './ocr-review.mjs';
-import {createSheetsPanel} from './receipt-sheets.mjs?v=2';
+import {createSheetsPanel} from './receipt-sheets.mjs?v=4';
 import {createCorrectionManager} from './correction-manager.mjs';
+import {loadCategories} from './category-suggestions.mjs';
+import {copyToClipboard} from './receipt-clipboard.mjs';
 
 const byId = id => document.getElementById(id);
+void loadCategories().catch(() => {});
 const form = byId('uploadForm');
 const fileInput = byId('fileInput');
 const status = byId('status');
@@ -39,11 +42,25 @@ let correctionSaver = null;
 let output = buildExports([]);
 let selectedFile = null;
 let loading = false;
+let cancelling = false;
+let uploadCancelled = false;
 let acknowledgedOutput = null;
 let correctionsPending = false;
 let unloadWarningAttached = false;
 const pageWindow = typeof window === 'undefined' ? null : window;
-const extraction = createReceiptExtraction({pageWindow});
+const extraction = createReceiptExtraction({pageWindow, onProgress(value) {
+    if (!loading || cancelling) return;
+    const phases = {UPLOADING: 'Recibiendo archivo', PREPARING: 'Preparando archivo', READING_PDF: 'Leyendo PDF',
+        PDF_TEXT: 'Leyendo texto digital', OCR: 'Reconociendo texto', PARSING: 'Organizando productos'};
+    const phase = phases[value?.phase];
+    if (!phase) return;
+    const total = Number.isInteger(value.pageCount) && value.pageCount > 0 ? value.pageCount : 0;
+    const page = Number.isInteger(value.pageNumber) && value.pageNumber > 0 ? value.pageNumber : 0;
+    byId('extractionPhase').textContent = `${total ? `Página ${Math.min(page, total)} de ${total} · ` : ''}${phase}…`;
+    const progress = byId('extractionPages');
+    if (total) { progress.max = total; progress.value = value.phase === 'PARSING' ? total : Math.max(0, page - 1); }
+    else progress.removeAttribute('value');
+}});
 let copyToastTimer = null;
 let undoTimer = null;
 let removedItem = null;
@@ -67,9 +84,14 @@ function updateUploadControls() {
     viewFile.disabled = blocked || !selectedFile;
     submitButton.textContent = loading ? 'Procesando…' : 'Extraer datos';
     fileInput.disabled = blocked;
+    byId('readingMode').disabled = blocked;
     form.setAttribute('aria-busy', String(loading));
     dropzone.setAttribute('aria-disabled', String(blocked));
     results.inert = blocked;
+    byId('cancelExtraction').classList.toggle('hidden', !loading);
+    byId('cancelExtraction').disabled = !loading || cancelling;
+    byId('cancelExtraction').textContent = cancelling ? 'Cancelando…' : 'Cancelar extracción';
+    byId('extractionProgress').classList.toggle('hidden', !loading);
     sheetsPanel.setProcessing(loading);
 }
 
@@ -119,6 +141,22 @@ replaceFile.addEventListener('click', () => {
 });
 
 fileInput.addEventListener('change', () => selectFile(fileInput.files?.[0]));
+document.addEventListener('paste', event => {
+    if (event.defaultPrevented || loading || sheetsBusy) return;
+    // Mantener el pegado habitual en los campos de edición y los diálogos.
+    const target = event.target;
+    if (target?.isContentEditable
+            || target?.closest?.('input:not([type="file"]), textarea, select, [role="textbox"], dialog')) return;
+    const clipboard = event.clipboardData;
+    const image = Array.from(clipboard?.items ?? [])
+        .find(item => item.kind === 'file' && item.type.startsWith('image/'));
+    const file = image?.getAsFile()
+        ?? Array.from(clipboard?.files ?? []).find(file => file.type.startsWith('image/'));
+    if (!file) return;
+    event.preventDefault();
+    fileInput.value = '';
+    selectFile(file);
+});
 ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
     dropzone.addEventListener(eventName, event => {
         event.preventDefault();
@@ -137,7 +175,12 @@ form.addEventListener('submit', async event => {
     const error = validateFile(selectedFile);
     if (error) { status.textContent = error; return; }
     const file = selectedFile;
+    const extractionStarted = Date.now();
     loading = true;
+    uploadCancelled = false;
+    cancelling = false;
+    byId('extractionPhase').textContent = 'Preparando archivo…';
+    byId('extractionPages').removeAttribute('value');
     updateUploadControls();
     status.textContent = 'Procesando la factura. Las imágenes grandes y los PDF pueden tardar varios minutos…';
     try {
@@ -146,7 +189,9 @@ form.addEventListener('submit', async event => {
             status.textContent = 'Reintentá el guardado de las correcciones antes de cargar otra factura.';
             return;
         }
-        const payload = await extraction.extract(file);
+        if (uploadCancelled) { const error = new Error('Extracción cancelada.'); error.name = 'AbortError'; throw error; }
+        const payload = await extraction.extract(file, {searchBudgetSeconds:byId('readingMode').value === 'detailed' ? 90 : 8});
+        if (uploadCancelled) { const error = new Error('Extracción cancelada.'); error.name = 'AbortError'; throw error; }
         const nextReceipt = createReceipt(payload);
         // Conservar el ticket y sus ediciones hasta recibir una respuesta válida.
         clearReceiptState();
@@ -173,17 +218,31 @@ form.addEventListener('submit', async event => {
         if (receipt.warnings.length) {
             requestAnimationFrame(() => byId('warningsTitle').focus());
         }
+        const elapsed = ((Date.now() - extractionStarted) / 1000).toLocaleString('es-AR', {maximumFractionDigits:1});
         status.textContent = receipt.warnings.length
-            ? `Listo. Hay ${receipt.warnings.length} advertencia(s) para revisar.`
-            : 'Listo. Revisá las filas y copiá la salida.';
+            ? `Listo en ${elapsed} s. Hay ${receipt.warnings.length} advertencia(s) para revisar.`
+            : `Listo en ${elapsed} s. Revisá las filas y copiá la salida.`;
     } catch (error) {
-        if (error.name === 'AbortError') return;
+        if (error.name === 'AbortError') {
+            status.textContent = `Extracción cancelada.${receipt ? ' Se conserva el ticket anterior.' : ''}`;
+            return;
+        }
         console.error('[facturas] Error al procesar la factura', error);
         status.textContent = `Error: ${error.message}${receipt ? ' Se conserva el ticket anterior.' : ''}`;
     } finally {
         loading = false;
         updateUploadControls();
     }
+});
+
+byId('cancelExtraction').addEventListener('click', async () => {
+    if (!loading || cancelling) return;
+    cancelling = true; updateUploadControls();
+    uploadCancelled = true;
+    byId('extractionPhase').textContent = 'Solicitando cancelación…';
+    try { await extraction.cancel(); }
+    catch (error) { uploadCancelled = false; status.textContent = `${error.message} Podés reintentar la cancelación.`; }
+    finally { cancelling = false; updateUploadControls(); }
 });
 
 function clearReceiptState() {
@@ -337,7 +396,7 @@ async function copyText(value, message) {
             || discountValidationErrors(receipt.discounts).length > 0) return;
     const copiedOutput = output.pipe;
     try {
-        await navigator.clipboard.writeText(value);
+        await copyToClipboard(value);
         acknowledgedOutput = copiedOutput;
         updateUnloadWarning();
         setActiveStep(2);

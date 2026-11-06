@@ -5,7 +5,7 @@ import java.util.regex.Pattern;
 
 /** Associates a standalone multiplier with the following printed line amount. */
 final class ReceiptQuantityReader {
-    private static final Pattern EXPLICIT = Pattern.compile("(?i)^\\s*(\\d+(?:[.,]\\d{1,4})?)\\s*x\\s*\\$?\\s*(\\d+(?:[.,]\\d+)*)\\s*$");
+    private static final Pattern EXPLICIT = Pattern.compile("(?i)^\\s*(\\d{1,4}(?:[.,]\\d{1,4})?)\\s*x\\s*\\$?\\s*(\\d+(?:[.,]\\d+)*)\\s*$");
     private static final Pattern JOINED = Pattern.compile("^\\d{4,}[.,]\\d{2}$");
     private static final Pattern JOINED_WEIGHT = Pattern.compile("^(\\d{1,3}[.,])(\\d{5,})[.,](\\d{2})$");
 

@@ -1,3 +1,5 @@
+import {zero, decimal, add, multiply, roundMoney, toNumber} from './receipt-decimal.mjs';
+
 export const COLUMNS = [
     ['descripcion', 'Descripción'], ['marca', 'Marca'], ['lugarDeCompra', 'Lugar de compra'],
     ['categoria', 'Categoria'], ['cantidad', 'Cantidad'], ['precioUnitario', 'Precio unitario'], ['fecha', 'Fecha']
@@ -18,8 +20,8 @@ export function createReceipt(payload) {
     };
 }
 
-export function parseLocalizedNumber(value, {quantity = false} = {}) {
-    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+function localizedDecimal(value, {quantity = false} = {}) {
+    if (typeof value === 'number') return Number.isFinite(value) ? decimal(String(value)) : null;
     let text = String(value ?? '').trim().replace(/\s/g, '');
     if (!quantity) text = text.replace(/^\$/, '');
     if (!text) return null;
@@ -29,15 +31,24 @@ export function parseLocalizedNumber(value, {quantity = false} = {}) {
     }
     if (!/^[+-]?(?:\d+(?:[.,]\d+)?|[.,]\d+)$/.test(text)) return null;
     const number = Number(text.replace(',', '.'));
-    return Number.isFinite(number) ? number : null;
+    return Number.isFinite(number) ? decimal(text.replace(',', '.')) : null;
+}
+
+export function parseLocalizedNumber(value, options = {}) {
+    const amount = localizedDecimal(value, options);
+    return amount ? toNumber(amount) : null;
+}
+
+function exactTotal(items) {
+    return items.filter(item => item.usar !== false).reduce((sum, item) => {
+        const price = localizedDecimal(item.precioUnitario);
+        const quantity = localizedDecimal(item.cantidad, {quantity: true});
+        return add(sum, multiply(price ?? zero(), quantity ?? zero()));
+    }, zero());
 }
 
 export function calculateTotal(items) {
-    return items.filter(item => item.usar !== false).reduce((sum, item) => {
-        const price = parseLocalizedNumber(item.precioUnitario);
-        const quantity = parseLocalizedNumber(item.cantidad, {quantity: true});
-        return sum + (price ?? 0) * (quantity ?? 0);
-    }, 0);
+    return toNumber(exactTotal(items));
 }
 
 export function formatTotal(value) {
@@ -45,13 +56,12 @@ export function formatTotal(value) {
 }
 
 export function calculateSummary(items, discounts = []) {
-    const round = value => Math.round(value * 100) / 100;
-    const subtotal = round(calculateTotal(items));
-    const discountTotal = round(discounts.filter(discount => discount.usar !== false).reduce((sum, discount) => {
-        const amount = parseLocalizedNumber(discount.importe);
-        return sum + (amount !== null && amount <= 0 ? amount : 0);
-    }, 0));
-    return {subtotal, discountTotal, total: round(subtotal + discountTotal)};
+    const subtotal = roundMoney(exactTotal(items));
+    const discountTotal = roundMoney(discounts.filter(discount => discount.usar !== false).reduce((sum, discount) => {
+        const amount = localizedDecimal(discount.importe);
+        return add(sum, amount !== null && amount.value <= 0n ? amount : zero());
+    }, zero()));
+    return {subtotal: toNumber(subtotal), discountTotal: toNumber(discountTotal), total: toNumber(add(subtotal, discountTotal))};
 }
 
 export function discountValidationErrors(discounts = []) {
@@ -88,7 +98,7 @@ export function buildExports(items, discounts = [], context = {}) {
         .map(row => row.map(value => escapeDelimited(value, delimiter)).join(delimiter)).join('\n');
     return {
         pipe: join(withHeader, '|'), tsv: join(withHeader, '\t'), rowsOnly: join(rows, '\t'),
-        count: selected.length, total: Math.round(calculateTotal(selected) * 100) / 100
+        count: selected.length, total: calculateSummary(items, discounts).total
     };
 }
 

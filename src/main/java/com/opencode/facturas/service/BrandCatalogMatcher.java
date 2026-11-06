@@ -15,46 +15,61 @@ class BrandCatalogMatcher {
             "^(?:spag|sphg|gal|jabon|jab0n|papel|pan|lim[opn]|arroz|manz|cafe|crem|may|vinag|gran|raviol|pure|salchi|fide).*");
 
     private final Set<String> brands;
+    private List<BrandCatalog.BrandMatch> matches = List.of();
+    private java.util.Map<String, Pattern> anywherePatterns = java.util.Map.of();
 
     BrandCatalogMatcher(Set<String> brands) {
         this.brands = brands;
+        refresh();
+    }
+
+    void refresh() {
+        var unique = new java.util.LinkedHashSet<BrandCatalog.BrandMatch>();
+        var patterns = new java.util.HashMap<String, Pattern>();
+        for (String brand : brands) for (String alias : aliasesFor(brand)) {
+            String normalized = normalize(alias);
+            if (normalized.isBlank()) continue;
+            unique.add(new BrandCatalog.BrandMatch(brand, normalized));
+            patterns.computeIfAbsent(normalized, this::aliasPattern);
+        }
+        matches = List.copyOf(unique); anywherePatterns = java.util.Map.copyOf(patterns);
     }
 
     Optional<BrandCatalog.BrandMatch> findIn(String description) {
         String normalizedDescription = normalize(description);
         String compactDescription = compact(normalizedDescription);
 
-        return brands.stream()
-                .flatMap(brand -> aliasesFor(brand).stream()
-                        .map(alias -> new BrandCatalog.BrandMatch(brand, normalize(alias))))
+        return matches.stream()
                 .filter(match -> startsWithAlias(normalizedDescription, compactDescription, match.normalizedAlias()))
                 .max(Comparator.comparingInt(match -> compact(match.normalizedAlias()).length()));
     }
 
     Optional<BrandCatalog.BrandMatch> findAnywhereIn(String description) {
         String normalizedDescription = normalize(description);
-        String compactDescription = compact(normalizedDescription);
 
-        return brands.stream()
-                .flatMap(brand -> aliasesFor(brand).stream()
-                        .map(alias -> new BrandCatalog.BrandMatch(brand, normalize(alias))))
-                .filter(match -> normalizedDescription.contains(match.normalizedAlias())
-                        || compactDescription.contains(compact(match.normalizedAlias())))
+        return matches.stream()
+                .filter(match -> anywherePatterns.get(match.normalizedAlias()).matcher(normalizedDescription).find())
                 .max(Comparator.comparingInt(match -> compact(match.normalizedAlias()).length()));
+    }
+
+    private Pattern aliasPattern(String alias) {
+        String letters = compact(alias).chars().mapToObj(c -> Pattern.quote(String.valueOf((char) c)))
+                .collect(java.util.stream.Collectors.joining("\\s*"));
+        return Pattern.compile("(?<![a-z0-9])" + letters + "(?![a-z0-9])");
     }
 
     Optional<BrandCatalog.BrandMatch> findJoinedAtStart(String description) {
         String first = normalize(description).split(" ")[0];
-        return brands.stream().flatMap(brand -> aliasesFor(brand).stream().map(alias -> {
-                    String key = compact(normalize(alias));
+        return matches.stream().map(match -> {
+                    String key = compact(match.normalizedAlias());
                     if (key.length() < 3 || first.length() < key.length() + 3) return null;
                     String prefix = first.substring(0, key.length());
                     String suffix = first.substring(key.length());
                     if (!JOINED_PRODUCT.matcher(suffix).matches()
                             || commonPrefixLength(comparisonKey(prefix), comparisonKey(key)) < 1
                             || similarity(comparisonKey(prefix), comparisonKey(key)) < 75) return null;
-                    return new BrandCatalog.BrandMatch(brand, prefix);
-                })).filter(java.util.Objects::nonNull)
+                    return new BrandCatalog.BrandMatch(match.brand(), prefix);
+                }).filter(java.util.Objects::nonNull)
                 .max(Comparator.comparingInt(match -> match.normalizedAlias().length()));
     }
 
@@ -76,9 +91,8 @@ class BrandCatalogMatcher {
             return Optional.empty();
         }
 
-        return brands.stream()
-                .flatMap(brand -> aliasesFor(brand).stream()
-                        .map(alias -> new BrandCatalog.FuzzyBrandMatch(brand, normalize(alias).split(" ")[0])))
+        return matches.stream()
+                .map(match -> new BrandCatalog.FuzzyBrandMatch(match.brand(), match.normalizedAlias().split(" ")[0]))
                 .filter(match -> match.normalizedAlias().length() >= 4)
                 .map(match -> new BrandCatalog.FuzzyBrandMatch(
                         match.brand(),

@@ -2,7 +2,9 @@
     [ValidateSet('Start', 'Stop')][string]$Action = 'Start',
     [switch]$SkipBuild,
     [ValidateRange(1, 3600)][int]$OcrStartupTimeoutSec = 300,
-    [string]$Python = ''
+    [string]$Python = '',
+    [ValidateRange(1, 65535)][int]$Port = 8080,
+    [switch]$OpenBrowser
 )
 
 $ErrorActionPreference = 'Stop'
@@ -11,6 +13,7 @@ $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $logRoot = Join-Path $repoRoot 'logs'
 $buildJar = Join-Path $repoRoot 'target/facturas-ocr-0.0.1-SNAPSHOT.jar'
 $runtimeRoot = Join-Path $logRoot 'runtime'
+$portRecord = Join-Path $logRoot 'app.port'
 New-Item -ItemType Directory -Force -Path $logRoot, $runtimeRoot | Out-Null
 
 function Get-LocalServiceProcess([int]$port, [string]$name) {
@@ -40,7 +43,8 @@ function Get-LocalServiceProcess([int]$port, [string]$name) {
         }
         if (-not $belongs) {
             if ($listeningIds -contains $serviceId) {
-                throw "El puerto $port pertenece a otro proceso. No se detuvo: $serviceId."
+                $hint = if ($name -eq 'app') { ' Para usar otro puerto: scripts/local.ps1 -Port 8081 -OpenBrowser.' } else { '' }
+                throw "El puerto $port pertenece a otro proceso. No se detuvo: $serviceId.$hint"
             }
             # Después de un reinicio, Windows puede asignar el PID guardado a otro programa.
             # Descartar el registro obsoleto sin tocar ese proceso.
@@ -66,21 +70,34 @@ function Stop-LocalService([int]$port, [string]$name) {
     if (Test-Path -LiteralPath $record) { Remove-Item -LiteralPath $record }
 }
 
+function Resolve-LocalAppPort([int]$requestedPort = 8080, [switch]$UseSavedPort) {
+    if ($UseSavedPort -and (Test-Path -LiteralPath $portRecord)) {
+        $savedPort = 0
+        if ([int]::TryParse((Get-Content -LiteralPath $portRecord -Raw).Trim(), [ref]$savedPort) -and
+            $savedPort -ge 1 -and $savedPort -le 65535) {
+            return $savedPort
+        }
+    }
+    return $requestedPort
+}
+
 function Get-OcrHealth {
     try { Invoke-RestMethod 'http://127.0.0.1:5000/health' -TimeoutSec 2 } catch { $null }
 }
 
 Push-Location $repoRoot
 try {
+    $explicitPort = $PSBoundParameters.ContainsKey('Port')
+    $Port = Resolve-LocalAppPort $Port -UseSavedPort:($Action -eq 'Stop' -and -not $explicitPort)
     if ($Action -eq 'Stop') {
-        Stop-LocalService 8080 'app'
+        Stop-LocalService $Port 'app'
         Stop-LocalService 5000 'ocr'
         return
     }
 
     # Legacy launchers execute target directly. Stop those instances before
     # Maven can replace their archive and break lazy class loading.
-    foreach ($process in @(Get-LocalServiceProcess 8080 'app')) {
+    foreach ($process in @(Get-LocalServiceProcess $Port 'app')) {
         if (-not $process.CommandLine.Contains($runtimeRoot)) {
             Stop-Process -Id $process.ProcessId -Force
             Wait-Process -Id $process.ProcessId -Timeout 10 -ErrorAction SilentlyContinue
@@ -123,7 +140,7 @@ try {
 
     $snapshotJar = Join-Path $runtimeRoot ('app-' + [guid]::NewGuid().ToString('N') + '.jar')
     Copy-Item -LiteralPath $buildJar -Destination $snapshotJar
-    Stop-LocalService 8080 'app'
+    Stop-LocalService $Port 'app'
     # Java 17 on some Windows environments cannot connect AF_UNIX pipes.
     # A long temporary path selects the JDK's built-in TCP loopback fallback.
     $socketRoot = Join-Path $runtimeRoot 'java-internal-loopback-sockets-windows-temporary-directory'
@@ -131,19 +148,28 @@ try {
     $java = if ($env:JAVA_HOME -and (Test-Path -LiteralPath (Join-Path $env:JAVA_HOME 'bin/java.exe'))) {
         Join-Path $env:JAVA_HOME 'bin/java.exe'
     } else { (Get-Command java.exe -ErrorAction Stop).Source }
-    $arguments = '"-Djdk.net.unixdomain.tmpdir=' + $socketRoot + '" -jar "' + $snapshotJar + '"'
+    $arguments = '"-Djdk.net.unixdomain.tmpdir=' + $socketRoot + '" -jar "' + $snapshotJar + '" --server.port=' + $Port
+    if (-not $env:APP_GOOGLE_REDIRECT_URI) {
+        $arguments += ' --app.google.redirect-uri=http://localhost:' + $Port + '/api/sheets/oauth/callback'
+    }
     $appProcess = Start-Process -FilePath $java -ArgumentList $arguments -WorkingDirectory $repoRoot `
         -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logRoot 'app.log') `
         -RedirectStandardError (Join-Path $logRoot 'app-error.log') -PassThru
     Set-Content -LiteralPath (Join-Path $logRoot 'app.pid') -Value $appProcess.Id
+    Set-Content -LiteralPath $portRecord -Value $Port
     for ($attempt = 0; $attempt -lt 30; $attempt++) {
         if ($appProcess.HasExited) {
             throw 'La aplicación terminó durante el arranque. Revisá logs/app.log y logs/app-error.log.'
         }
         try {
-            $response = Invoke-WebRequest 'http://127.0.0.1:8080/' -UseBasicParsing -TimeoutSec 2
-            if ($response.StatusCode -eq 200) { Write-Host 'App lista: http://localhost:8080'; return }
-        } catch { }
+            $response = Invoke-WebRequest "http://127.0.0.1:$Port/" -UseBasicParsing -TimeoutSec 2
+        } catch { $response = $null }
+        if ($response -and $response.StatusCode -eq 200) {
+            $appUrl = "http://localhost:$Port"
+            Write-Host "App lista: $appUrl"
+            if ($OpenBrowser) { Start-Process $appUrl }
+            return
+        }
         Start-Sleep -Seconds 1
     }
     throw 'La aplicación no respondió. Revisá logs/app.log y logs/app-error.log.'

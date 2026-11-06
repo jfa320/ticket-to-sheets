@@ -27,6 +27,68 @@ def detection(text, top, bottom, confidence):
 
 @unittest.skipUnless(importlib.util.find_spec("flask"), "Flask is not installed")
 class OcrServiceTest(unittest.TestCase):
+    def test_engine_is_not_published_until_warmup_finishes(self):
+        def warming(engine):
+            self.assertNotIn('es',self.service.OCR_CACHE)
+            self.assertFalse(self.service.app.test_client().get('/health').json['ocrReady'])
+        with patch.object(self.service,'model_path_options',return_value={}),patch.object(self.service,'warm_ocr',side_effect=warming):
+            self.service.get_ocr('es')
+        self.assertTrue(self.service.app.test_client().get('/health').json['ocrReady'])
+    def test_incompatible_optimized_inference_falls_back_without_purging_downloaded_models(self):
+        first,second=Mock(),Mock()
+        with patch.object(self.service,'model_path_options',return_value={}), \
+                patch.object(self.service,'PaddleOCR',side_effect=[first,second]) as factory, \
+                patch.object(self.service,'warm_ocr',side_effect=[RuntimeError('native optimized failure'),None]), \
+                patch.object(self.service,'purge_corrupted_paddle_cache') as purge:
+            self.assertIs(second,self.service.get_ocr('es'))
+            self.assertFalse(factory.call_args.kwargs['enable_mkldnn']);purge.assert_not_called()
+    def test_short_budget_routes_to_fast_reading_and_detailed_keeps_the_full_search(self):
+        image=BytesIO();Image.new('RGB',(20,20),'white').save(image,format='PNG')
+        with patch.dict(self.service.OCR_CACHE,{self.service.DEFAULT_LANGUAGE:Mock()}), \
+                patch.object(self.service,'run_fast_ocr',return_value=('fast-0',[],[],1)) as fast, \
+                patch.object(self.service,'run_best_ocr',return_value=('detailed',[],[],1)) as detailed:
+            client=self.service.app.test_client()
+            self.assertEqual(200,client.post('/ocr',data=image.getvalue(),headers={'X-OCR-Search-Budget-Seconds':'8'}).status_code)
+            fast.assert_called_once();detailed.assert_not_called()
+            self.assertEqual(200,client.post('/ocr',data=image.getvalue(),headers={'X-OCR-Search-Budget-Seconds':'90'}).status_code)
+            detailed.assert_called_once()
+    def test_normal_logs_exclude_ocr_content_and_debug_requires_explicit_opt_in(self):
+        image = Image.new("RGB", (200, 100), "white")
+        private = [detection("COMPRA_FICTICIA_RESERVADA 1234,56", 10, 30, .99)]
+        for debug in ("false", "true"):
+            with patch.object(self.service, "get_ocr", return_value=Mock()), \
+                    patch.object(self.service, "build_variants", side_effect=lambda *a, **k: iter([("original", image)])), \
+                    patch.object(self.service, "ocr_image", return_value=(private, private)), \
+                    patch.dict(os.environ, {"APP_OCR_DEBUG": debug, "OCR_TARGETED_RETRY": "false", "OCR_VARIANT_FUSION": "false"}), \
+                    self.assertLogs(self.service.app.logger, level="DEBUG") as logs:
+                self.service.run_best_ocr(image, "es")
+            normal = "\n".join(record.getMessage() for record in logs.records if record.levelno >= 20)
+            self.assertNotIn("COMPRA_FICTICIA", normal)
+            self.assertNotIn("1234,56", normal)
+            self.assertEqual(debug == "true", "COMPRA_FICTICIA" in "\n".join(logs.output))
+
+    def test_document_budget_is_validated_enforced_without_adaptive_search_and_cleared(self):
+        output = BytesIO(); Image.new("RGB", (20, 40), "white").save(output, "PNG")
+        elapsed = [0.0]
+        def slow_read(*args):
+            elapsed[0] += 2
+            return [], []
+        with patch.dict(self.service.OCR_CACHE, {self.service.DEFAULT_LANGUAGE: Mock()}), \
+                patch.dict(os.environ, {"OCR_ADAPTIVE_SEARCH": "false", "APP_OCR_DEBUG": "false"}), \
+                patch.object(self.service.time, "perf_counter", side_effect=lambda: elapsed[0]), \
+                patch.object(self.service, "build_variants", side_effect=lambda *a, **k: iter([("original", Image.new("RGB", (20, 40)))])), \
+                patch.object(self.service, "ocr_image", side_effect=slow_read):
+            client = self.service.app.test_client()
+            for value in ("0", "-1", "NaN", "inf", "3601", "oops"):
+                self.assertEqual(400, client.post("/ocr", data=output.getvalue(),
+                    headers={"X-OCR-Document-Remaining-Seconds": value}).status_code)
+            response = client.post("/ocr", data=output.getvalue(), headers={"X-OCR-Document-Remaining-Seconds": ".5"})
+            self.assertEqual(408, response.status_code)
+            self.assertNotIn("text", response.json)
+            self.assertFalse(hasattr(self.service.OCR_REQUEST_CONTEXT, "document_deadline"))
+            with patch.object(self.service, "run_best_ocr", return_value=("synthetic", [], [], 1.0)):
+                self.assertEqual(200, client.post("/ocr", data=output.getvalue()).status_code)
+
     def test_orientation_probe_cannot_replace_a_completed_full_resolution_reading(self):
         image=Image.new('RGB',(400,600),'white');probe=Image.new('RGB',(200,300),'white')
         search=Mock(complete=False)

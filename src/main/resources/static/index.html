@@ -8,10 +8,11 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/styles.css?v=15">
+    <link rel="stylesheet" href="/styles.css?v=16">
 </head>
 <body>
 <main class="shell">
+    <datalist id="categorySuggestions"></datalist>
     <section class="hero">
         <button id="sheetsSettingsOpen" class="settings-open" type="button" aria-label="Configuración de Google Sheets" aria-haspopup="dialog" aria-controls="sheetsSettingsDialog" title="Configuración de Google Sheets">
             <svg aria-hidden="true" width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.07-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.61-.22l-2.39.96a7.28 7.28 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.88 2h-3.76a.5.5 0 0 0-.49.42l-.36 2.54a7.28 7.28 0 0 0-1.63.94l-2.39-.96a.5.5 0 0 0-.61.22L2.72 8.48a.5.5 0 0 0 .12.64l2.03 1.58a7.93 7.93 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .61.22l2.39-.96c.5.39 1.04.7 1.63.94l.36 2.54a.5.5 0 0 0 .49.42h3.76a.5.5 0 0 0 .49-.42l.36-2.54c.59-.24 1.13-.55 1.63-.94l2.39.96a.5.5 0 0 0 .61-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58Z"/><circle cx="12" cy="12" r="3.5"/></svg>
@@ -36,13 +37,19 @@
             </div>
             <a id="sheetsDestinationLink" class="sheets-link hidden" target="_blank" rel="noopener noreferrer">Abrir planilla</a>
         </div>
+        <div class="sheets-config-actions" aria-label="Conexión con Google">
+            <button id="sheetsGoogleConnect" type="button" disabled>Conectar con Google</button>
+            <button id="sheetsGoogleChoose" class="secondary-action" type="button" disabled>Elegir planilla de Google</button>
+            <button id="sheetsGoogleDisconnect" class="link-button hidden" type="button" disabled>Desconectar Google</button>
+        </div>
+        <p id="sheetsAccountStatus" class="sheets-help" role="status" aria-live="polite">Consultando la conexión…</p>
         <form id="sheetsConfigForm" novalidate>
             <fieldset id="sheetsConfigFields" class="sheets-fields">
                 <legend class="sr-only">Configuración del destino</legend>
                 <div class="sheets-field sheets-file-field">
-                    <label for="sheetsSpreadsheet">Enlace o ID de la planilla</label>
-                    <input id="sheetsSpreadsheet" type="text" autocomplete="off" placeholder="https://docs.google.com/spreadsheets/d/…" aria-describedby="sheetsSpreadsheetHint sheetsSpreadsheetError">
-                    <small id="sheetsSpreadsheetHint">Usá una planilla nativa de Google Sheets alojada en Drive.</small>
+                    <label for="sheetsSpreadsheet">Planilla elegida</label>
+                    <input id="sheetsSpreadsheet" type="text" readonly autocomplete="off" placeholder="Elegí una planilla desde Google" aria-describedby="sheetsSpreadsheetHint sheetsSpreadsheetError">
+                    <small id="sheetsSpreadsheetHint">Elegí una planilla nativa de Google Sheets. La aplicación accede a los archivos que autorices desde el selector.</small>
                     <small id="sheetsSpreadsheetError" class="sheets-field-error"></small>
                 </div>
                 <div class="sheets-field">
@@ -63,8 +70,6 @@
                 <button id="sheetsSettingsClose" class="link-button" type="button">Cerrar</button>
             </div>
         </form>
-        <p id="sheetsAccountStatus" class="sheets-help">Consultando la conexión…</p>
-        <p id="sheetsShareHint" class="sheets-help hidden">Compartí la planilla con permiso de Editor con <strong id="sheetsServiceAccount"></strong>.</p>
         <p id="sheetsConfigStatus" class="sheets-feedback" role="status" aria-live="polite" aria-atomic="true"></p>
         <fieldset class="sheets-month-mappings" id="sheetsMonthMappings" disabled aria-label="Asociación de pestañas por mes"></fieldset>
         <p id="sheetsMonthHint" class="sheets-help">Si dejás “Detectar por nombre”, se propone una pestaña clara como Agosto. El destino se elige según la fecha del ticket y podés cambiarlo para cargar meses atrasados.</p>
@@ -83,6 +88,30 @@
     <dialog id="correctionsDialog" class="corrections-dialog" aria-labelledby="correctionsTitle">
         <div class="output-header"><h2 id="correctionsTitle">Correcciones aprendidas</h2><button id="correctionsClose" type="button">Cerrar</button></div>
         <p>Buscá por comercio, texto OCR, descripción, marca o categoría. Los cambios se aplican a próximas extracciones.</p>
+        <div id="correctionsUnsaved" class="unsaved-notice" role="alert" tabindex="-1" hidden>
+            <p>Tenés cambios sin guardar en las correcciones.</p>
+            <fieldset id="correctionsUnsavedFields" class="correction-actions">
+                <button id="correctionsSaveAll" type="button">Guardar y continuar</button>
+                <button id="correctionsDiscard" type="button" class="secondary-action">Descartar y continuar</button>
+                <button id="correctionsKeepEditing" type="button" class="secondary-action">Seguir editando</button>
+            </fieldset>
+        </div>
+        <details id="learningPanel" class="learning-backup-panel">
+            <summary>Respaldo del aprendizaje</summary>
+            <fieldset id="learningFields" class="learning-backup">
+                <legend>Exportar o restaurar</legend>
+                <p class="helper">Exportá correcciones y marcas para conservarlas o trasladarlas a otra instalación.</p>
+                <button id="learningExport" type="button" class="secondary-action">Descargar respaldo</button>
+                <label for="learningFile">Seleccionar respaldo para restaurar</label>
+                <input id="learningFile" type="file" accept="application/json,.json" aria-describedby="learningStatus">
+                <div id="learningPreview"></div>
+                <div class="correction-actions">
+                    <button id="learningRestore" type="button" disabled>Restaurar aprendizaje</button>
+                    <button id="learningCancel" type="button" class="secondary-action" hidden>Cancelar restauración</button>
+                </div>
+                <p id="learningStatus" role="status" aria-live="polite" aria-atomic="true"></p>
+            </fieldset>
+        </details>
         <form id="correctionsSearch"><fieldset id="correctionsFields">
             <label for="correctionsQuery">Buscar correcciones</label>
             <input id="correctionsQuery" type="search" maxlength="300">
@@ -96,11 +125,12 @@
     <section class="panel uploader">
         <form id="uploadForm" novalidate>
             <label class="dropzone" for="fileInput">
-                <input id="fileInput" name="file" type="file" accept="image/*,.pdf" aria-label="Elegir imagen o PDF" aria-describedby="fileHint">
+                <input id="fileInput" name="file" type="file" accept="image/*,.pdf" aria-label="Elegir imagen o PDF" aria-describedby="clipboardHint fileHint">
                 <svg class="upload-icon" aria-hidden="true" width="48" height="48" viewBox="0 0 48 48" fill="none" stroke="#0f766e" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" focusable="false">
                     <path d="M24 31V9m0 0-8 8m8-8 8 8M12 27v8a4 4 0 0 0 4 4h16a4 4 0 0 0 4-4v-8" />
                 </svg>
                 <span class="dropzone-title">Arrastrá la factura o hacé clic para elegirla</span>
+                <span id="clipboardHint" class="dropzone-hint">También podés pegar una imagen con Ctrl+V (⌘V en Mac) y después presionar «Extraer datos».</span>
                 <span id="fileHint" class="dropzone-hint">Hasta 20 MB. Imágenes: 20 megapíxeles; PDF: hasta 20 páginas. Idealmente una foto centrada y con buena luz.</span>
             </label>
 
@@ -113,11 +143,21 @@
             </div>
 
             <div class="upload-actions">
+                <label class="reading-mode" for="readingMode">Lectura
+                    <select id="readingMode"><option value="fast">Rápida</option><option value="detailed">Detallada</option></select>
+                </label>
                 <button id="viewFile" class="secondary-action" type="button" disabled>Ver archivo seleccionado</button>
                 <button id="submitButton" type="submit" disabled>Extraer datos</button>
+                <button id="cancelExtraction" class="secondary-action hidden" type="button" disabled>Cancelar extracción</button>
             </div>
+            <p class="helper">La lectura rápida busca resolver cada ticket en menos de 10 s. Si falta texto, probá la detallada; puede tardar más.</p>
         </form>
         <p id="status" class="status" role="status" aria-live="polite">Esperando archivo...</p>
+        <div id="extractionProgress" class="extraction-progress hidden" aria-live="polite" aria-atomic="true">
+            <p id="extractionPhase">Preparando archivo…</p>
+            <progress id="extractionPages" aria-label="Páginas procesadas"></progress>
+            <small>La cancelación puede esperar a que termine la lectura en curso.</small>
+        </div>
     </section>
 
     <section id="results" class="results hidden">
@@ -295,6 +335,6 @@
     <div id="filePreviewContent" class="file-preview-content"></div>
 </dialog>
 
-<script type="module" src="/app.js?v=20"></script>
+<script type="module" src="/app.js?v=25"></script>
 </body>
 </html>

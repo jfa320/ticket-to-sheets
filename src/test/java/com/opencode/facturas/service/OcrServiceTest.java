@@ -31,6 +31,21 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 class OcrServiceTest {
+    @Test void fastJpegIsValidatedAndForwardedWithoutReencodingTheOriginal() throws Exception {
+        var mapper=mock(OcrResultMapper.class); var client=mock(OcrApiClient.class);
+        var output=new ByteArrayOutputStream();ImageIO.write(new BufferedImage(30,40,BufferedImage.TYPE_INT_RGB),"JPEG",output);
+        byte[] original=output.toByteArray();
+        var expected=new OcrResult("LECHE 1200,00",List.of(),List.of(),"fast-0",1.0);
+        when(client.recognizeEncodedJpeg(any(byte[].class),any(ExtractionTask.class))).thenReturn("json");
+        when(mapper.parse("json")).thenReturn(expected);
+        var result=new OcrService(mapper,client,mock(PdfPageRenderer.class))
+                .extract(new MockMultipartFile("file","photo.jpg","image/jpeg",original));
+        assertThat(result).isSameAs(expected);
+        var bytes=ArgumentCaptor.forClass(byte[].class);
+        verify(client).recognizeEncodedJpeg(bytes.capture(),any(ExtractionTask.class));
+        assertThat(bytes.getValue()).containsExactly(original);
+        verify(client,never()).recognize(any(BufferedImage.class),any(ExtractionTask.class));
+    }
 
     @Test
     void preservesFaintTextAndColorWhenDelegatingToClientAndMapper() throws Exception {
@@ -39,7 +54,7 @@ class OcrServiceTest {
         PdfPageRenderer pdfRenderer = mock(PdfPageRenderer.class);
         OcrResult expected = new OcrResult("PRODUCTO 123,45", List.of(), List.of(), "enhanced", 42.5);
 
-        when(client.recognize(any(BufferedImage.class))).thenReturn("respuesta-json");
+        when(client.recognize(any(BufferedImage.class), any(ExtractionTask.class))).thenReturn("respuesta-json");
         when(mapper.parse("respuesta-json")).thenReturn(expected);
 
         BufferedImage source = new BufferedImage(2, 3, BufferedImage.TYPE_INT_RGB);
@@ -52,7 +67,9 @@ class OcrServiceTest {
 
         assertThat(result).isSameAs(expected);
         ArgumentCaptor<BufferedImage> imageCaptor = ArgumentCaptor.forClass(BufferedImage.class);
-        verify(client).recognize(imageCaptor.capture());
+        var taskCaptor = ArgumentCaptor.forClass(ExtractionTask.class);
+        verify(client).recognize(imageCaptor.capture(), taskCaptor.capture());
+        assertThat(taskCaptor.getValue().searchBudgetSeconds).isEqualTo(8);
         assertThat(imageCaptor.getValue().getWidth()).isEqualTo(34);
         assertThat(imageCaptor.getValue().getHeight()).isEqualTo(35);
         assertThat(imageCaptor.getValue().getType()).isEqualTo(BufferedImage.TYPE_INT_RGB);
@@ -79,7 +96,7 @@ class OcrServiceTest {
             processor.process(2, 2, null, secondImage);
             return null;
         }).when(pdfRenderer).forEachPage(any(), anyBoolean(), any());
-        when(client.recognize(any(BufferedImage.class))).thenReturn("pagina-1", "pagina-2");
+        when(client.recognize(any(BufferedImage.class), any(ExtractionTask.class))).thenReturn("pagina-1", "pagina-2");
         when(mapper.parse("pagina-1")).thenReturn(new OcrResult("UNO", List.of(line), List.of(), "original", 10.0));
         when(mapper.parse("pagina-2")).thenReturn(new OcrResult("DOS", List.of(), List.of(detection), "rotated", 30.0));
 
@@ -108,7 +125,7 @@ class OcrServiceTest {
             processor.process(1, 1, null, page);
             return null;
         }).when(pdfRenderer).forEachPage(any(), anyBoolean(), any());
-        when(client.recognize(any(BufferedImage.class))).thenReturn("pagina-1");
+        when(client.recognize(any(BufferedImage.class), any(ExtractionTask.class))).thenReturn("pagina-1");
         when(mapper.parse("pagina-1")).thenReturn(expected);
 
         OcrResult result = new OcrService(mapper, client, pdfRenderer).extract(
@@ -117,7 +134,7 @@ class OcrServiceTest {
 
         assertThat(result.text()).isEqualTo("PRODUCTO 123,45");
         verify(pdfRenderer).forEachPage(any(), anyBoolean(), any());
-        verify(client).recognize(any(BufferedImage.class));
+        verify(client).recognize(any(BufferedImage.class), any(ExtractionTask.class));
     }
 
     @Test
@@ -159,7 +176,7 @@ class OcrServiceTest {
         OcrResultMapper mapper = mock(OcrResultMapper.class);
         OcrApiClient client = mock(OcrApiClient.class);
         PdfPageRenderer pdfRenderer = mock(PdfPageRenderer.class);
-        when(client.recognize(any(BufferedImage.class))).thenReturn("respuesta-json");
+        when(client.recognize(any(BufferedImage.class), any(ExtractionTask.class))).thenReturn("respuesta-json");
         when(mapper.parse("respuesta-json")).thenReturn(new OcrResult("  ", List.of(), List.of(), null, null));
 
         OcrService service = new OcrService(mapper, client, pdfRenderer);
@@ -182,7 +199,7 @@ class OcrServiceTest {
         MockMultipartFile pdf = new MockMultipartFile("file", "ticket.pdf", "application/pdf", pdfWithPages(2));
         CountDownLatch started = new CountDownLatch(1);
         CountDownLatch finish = new CountDownLatch(1);
-        when(client.recognize(any(BufferedImage.class))).thenAnswer(invocation -> {
+        when(client.recognize(any(BufferedImage.class), any(ExtractionTask.class))).thenAnswer(invocation -> {
             started.countDown();
             if (!finish.await(5, TimeUnit.SECONDS)) throw new AssertionError("No se liberó la extracción de prueba");
             return "respuesta-json";
@@ -210,7 +227,7 @@ class OcrServiceTest {
         OcrService service = new OcrService(mapper, client, mock(PdfPageRenderer.class));
         OcrResult expected = new OcrResult("PRODUCTO 123,45", List.of(), List.of(), "original", 1.0);
         MockMultipartFile file = new MockMultipartFile("file", "ticket.png", "image/png", pngBytes(1, 1));
-        when(client.recognize(any(BufferedImage.class)))
+        when(client.recognize(any(BufferedImage.class), any(ExtractionTask.class)))
                 .thenThrow(new OcrUnavailableException("OCR pendiente", null))
                 .thenReturn("respuesta-json");
         when(mapper.parse("respuesta-json")).thenReturn(expected);

@@ -1,6 +1,8 @@
 import {COLUMNS, validationErrors, toDateInputValue, formatDateForItems} from './receipt-model.mjs';
 import {MONTH_NAMES, createMonthlyDestination} from './monthly-sheets.mjs?v=2';
-import {createRecoverableSheetsAppend} from './sheets-transfer-journal.mjs';
+import {createRecoverableSheetsAppend} from './sheets-transfer-journal.mjs?v=2';
+import {createUuid} from './browser-crypto.mjs';
+import {connectGoogle, loadGooglePicker, selectGoogleSpreadsheet} from './google-connection.mjs';
 
 export function spreadsheetIdFromInput(value) {
     const text = String(value ?? '').trim();
@@ -15,7 +17,7 @@ export function spreadsheetIdFromInput(value) {
 export function sheetsConfigErrors(config) {
     const errors = [];
     if (!spreadsheetIdFromInput(config.spreadsheetUrlOrId)) {
-        errors.push({field: 'spreadsheetUrlOrId', message: 'Ingresá el enlace de Google Sheets o el ID de la planilla.'});
+        errors.push({field: 'spreadsheetUrlOrId', message: 'Elegí una planilla con el selector de Google.'});
     }
     const year = Number(config.year);
     if (!Number.isInteger(year) || year < 1900 || year > 9999) {
@@ -53,7 +55,7 @@ export function sheetsSnapshotKey(config, items, destination = config) {
     });
 }
 
-export function createSheetsTransfer({append, newRequestId = () => crypto.randomUUID()} = {}) {
+export function createSheetsTransfer({append, newRequestId = createUuid} = {}) {
     const attempts = new Map();
     let pending = null;
     return {
@@ -120,6 +122,9 @@ export function createSheetsApi(fetchImpl = (...args) => fetch(...args)) {
     }
     return {
         getConfig: () => request('config'),
+        connectGoogle: () => request('oauth/connect', 'POST', {}),
+        pickerSession: () => request('oauth/picker', 'POST', {}),
+        disconnectGoogle: () => request('oauth/disconnect', 'POST', {}),
         saveConfig: config => request('config', 'PUT', config),
         check: () => request('check', 'POST', {}),
         getHistory: () => request('history'),
@@ -252,15 +257,22 @@ export function createSheetsPanel({getItems, onBusy, onSuccess, api = createShee
     }
 
     function showAccount(config) {
-        byId('sheetsAccountStatus').textContent = config.credentialsConfigured
-            ? 'Cuenta de servicio configurada en la aplicación.' : config.message || 'Falta configurar la cuenta de servicio de Google.';
-        byId('sheetsServiceAccount').textContent = config.serviceAccountEmail || '';
-        byId('sheetsShareHint').classList.toggle('hidden', !config.serviceAccountEmail);
+        byId('sheetsAccountStatus').textContent = config.message || (config.googleConnected
+            ? 'Google conectado.' : 'Conectá tu cuenta de Google para elegir una planilla.');
+        byId('sheetsGoogleConnect').classList.toggle('hidden', Boolean(config.googleConnected));
+        byId('sheetsGoogleDisconnect').classList.toggle('hidden', !config.googleConnected);
         const link = byId('sheetsDestinationLink');
         const validId = spreadsheetIdFromInput(config.spreadsheetId);
         link.classList.toggle('hidden', !validId);
         if (validId) link.href = `https://docs.google.com/spreadsheets/d/${validId}/edit`;
         else link.removeAttribute('href');
+    }
+
+    async function refreshGoogleConnection() {
+        const current = await api.getConfig();
+        saved = {...saved, googleConnected: current.googleConnected, oauthConfigured: current.oauthConfigured, message: current.message};
+        if (!saved.googleConnected) checked = false;
+        showAccount(saved);
     }
 
     function renderMonthMappings(values = saved?.monthSheets || {}) {
@@ -305,7 +317,7 @@ export function createSheetsPanel({getItems, onBusy, onSuccess, api = createShee
 
     function refreshHistory() {
         const blocked = busy || processing || loadingConfig || history.busy;
-        byId('sheetsHistorySync').disabled = blocked || !matchesSaved() || !saved?.credentialsConfigured || !checked;
+        byId('sheetsHistorySync').disabled = blocked || !matchesSaved() || !saved?.googleConnected || !checked;
         const removeButton = byId('sheetsHistoryRemove');
         removeButton.classList.toggle('hidden', !history.current?.active);
         removeButton.disabled = blocked || !history.current?.active;
@@ -348,7 +360,7 @@ export function createSheetsPanel({getItems, onBusy, onSuccess, api = createShee
             ? `Automático · ${target.label}` : 'Automático según la fecha del ticket';
         const selected = target.mode === 'manual' ? target.sheetName : '';
         destinationSelect.value = selected;
-        destinationSelect.disabled = blocked || !matchesSaved() || !saved?.credentialsConfigured || !checked || !availableSheets.length;
+        destinationSelect.disabled = blocked || !matchesSaved() || !saved?.googleConnected || !checked || !availableSheets.length;
         feedback(destinationStatus, target.message, Boolean(saved && checked && !target.sheetName));
         appendButton.textContent = transfer.busy ? 'Cargando…'
             : target.label ? `Cargar en ${target.label}` : 'Cargar en Google Sheets';
@@ -357,9 +369,12 @@ export function createSheetsPanel({getItems, onBusy, onSuccess, api = createShee
 
     function refresh() {
         const blocked = busy || processing || loadingConfig;
+        byId('sheetsGoogleConnect').disabled = blocked || !saved?.oauthConfigured;
+        byId('sheetsGoogleDisconnect').disabled = blocked || !saved?.googleConnected;
+        byId('sheetsGoogleChoose').disabled = blocked || !saved?.googleConnected;
         byId('sheetsConfigFields').disabled = blocked;
         byId('sheetsSave').disabled = blocked;
-        byId('sheetsCheck').disabled = blocked || !matchesSaved() || sheetsConfigErrors(draft()).length > 0;
+        byId('sheetsCheck').disabled = blocked || !saved?.googleConnected || !matchesSaved() || sheetsConfigErrors(draft()).length > 0;
         byId('sheetsConfigForm').setAttribute('aria-busy', String(busy || loadingConfig));
         monthMappings.disabled = blocked || !checked;
         refreshHistory();
@@ -374,8 +389,8 @@ export function createSheetsPanel({getItems, onBusy, onSuccess, api = createShee
             feedback(appendStatus, 'Guardá los cambios de configuración antes de cargar.');
             return;
         }
-        if (!saved?.credentialsConfigured || !checked) {
-            feedback(appendStatus, 'Abrí el engranaje para configurar la cuenta de servicio y comprobar la conexión.');
+        if (!saved?.googleConnected || !checked) {
+            feedback(appendStatus, 'Abrí el engranaje para conectar Google, elegir la planilla y comprobar la conexión.');
             return;
         }
         let state;
@@ -420,7 +435,12 @@ export function createSheetsPanel({getItems, onBusy, onSuccess, api = createShee
         if (normalizedConfig(current) !== normalizedConfig(saved) || current.configVersion !== saved.configVersion) {
             throw new Error('La configuración cambió desde otra ventana. Volvé a guardar y comprobarla.');
         }
-        const check = await api.check();
+        let check;
+        try { check = await api.check(); }
+        catch (error) {
+            await refreshGoogleConnection().catch(() => {});
+            throw error;
+        }
         if (check.spreadsheetId !== saved.spreadsheetId || check.headerRow !== saved.headerRow
             || check.configVersion !== saved.configVersion) {
             throw new Error('La configuración cambió durante la comprobación. Volvé a comprobarla.');
@@ -443,6 +463,57 @@ export function createSheetsPanel({getItems, onBusy, onSuccess, api = createShee
         else settingsDialog.setAttribute('open', '');
     });
     byId('sheetsSettingsClose').addEventListener('click', () => settingsDialog.close());
+    byId('sheetsGoogleConnect').addEventListener('click', async () => {
+        if (byId('sheetsGoogleConnect').disabled) return;
+        setBusy(true);
+        feedback(configStatus, 'Completá la autorización en la ventana de Google…');
+        try {
+            await connectGoogle({api});
+            await refreshGoogleConnection();
+            checked = false;
+            feedback(configStatus, 'Google conectado. Pulsá Elegir planilla de Google para autorizar tu archivo.');
+        } catch (error) { feedback(configStatus, error.message, true); }
+        finally { setBusy(false); }
+    });
+    byId('sheetsGoogleDisconnect').addEventListener('click', async () => {
+        if (byId('sheetsGoogleDisconnect').disabled) return;
+        setBusy(true);
+        try {
+            const result = await api.disconnectGoogle();
+            saved = {...saved, googleConnected: false, message: 'Google desconectado. Podés volver a conectar tu cuenta.'};
+            checked = false; availableSheets = []; suggestedMonthSheets = {};
+            showAccount(saved); renderMonthMappings(readMonthSheets());
+            feedback(configStatus, result.message);
+        } catch (error) { feedback(configStatus, error.message, true); }
+        finally { setBusy(false); }
+    });
+    byId('sheetsGoogleChoose').addEventListener('click', async () => {
+        if (byId('sheetsGoogleChoose').disabled) return;
+        setBusy(true);
+        feedback(configStatus, 'Abriendo el selector de Google…');
+        const reopen = settingsDialog.open;
+        try {
+            const pickerApi = await loadGooglePicker();
+            const session = await api.pickerSession();
+            // A modal <dialog> makes elements outside its top layer inert, including Google's iframe.
+            if (reopen) settingsDialog.close();
+            const selected = await selectGoogleSpreadsheet({session, pickerApi, origin: window.location.origin});
+            if (!selected) { feedback(configStatus, 'Selección cancelada. Se conserva el destino anterior.'); return; }
+            if (spreadsheetIdFromInput(fields.spreadsheetUrlOrId.value) !== selected.id) {
+                availableSheets = []; suggestedMonthSheets = {}; renderMonthMappings({});
+            }
+            fields.spreadsheetUrlOrId.value = selected.url;
+            checked = false; markErrors([]);
+            feedback(configStatus, `Planilla elegida: ${selected.name || selected.id}. Revisá el año y guardá la configuración.`);
+        } catch (error) {
+            await refreshGoogleConnection().catch(() => {});
+            feedback(configStatus, error.message, true);
+        }
+        finally {
+            if (reopen && !settingsDialog.open) settingsDialog.showModal();
+            setBusy(false); byId('sheetsGoogleChoose').focus();
+        }
+    });
     settingsDialog.addEventListener('click', event => {
         if (event.target === settingsDialog) settingsDialog.close();
     });
@@ -473,7 +544,7 @@ export function createSheetsPanel({getItems, onBusy, onSuccess, api = createShee
             } else {
                 feedback(configStatus, 'Configuración guardada. Comprobando planilla y pestañas compatibles…');
             }
-            if (saved.credentialsConfigured) {
+            if (saved.googleConnected) {
                 try { await checkCurrentConfig(); }
                 catch (error) { feedback(configStatus, `La configuración se guardó, pero no se pudo comprobar la planilla: ${error.message}`, true); }
             }
@@ -494,7 +565,7 @@ export function createSheetsPanel({getItems, onBusy, onSuccess, api = createShee
 
     byId('sheetsHistorySync').addEventListener('click', async () => {
         if (byId('sheetsHistorySync').disabled || busy || processing || history.busy
-            || !matchesSaved() || !checked || !saved?.credentialsConfigured) return;
+            || !matchesSaved() || !checked || !saved?.googleConnected) return;
         const config = {...saved};
         historyMessage = 'Leyendo los productos de las pestañas compatibles de la planilla…';
         historyError = false;
@@ -538,7 +609,10 @@ export function createSheetsPanel({getItems, onBusy, onSuccess, api = createShee
             refresh();
             await attempt;
             onSuccess();
-        } catch { /* El estado del intento conserva el error y el identificador para reintentar. */ }
+        } catch {
+            // Preserve the attempt/UUID even if Google now requires a new authorization.
+            await refreshGoogleConnection().catch(() => {});
+        }
         finally { setBusy(false); }
     });
 
@@ -561,7 +635,7 @@ export function createSheetsPanel({getItems, onBusy, onSuccess, api = createShee
                 ? saved.year ? 'Configuración guardada. Comprobando conexión…'
                     : `Configuración anterior detectada${saved.legacySheetName ? ` (pestaña “${saved.legacySheetName}”)` : ''}. Indicá el año de la planilla y guardá; después asociá la pestaña al mes que corresponda.`
                 : 'Configurá la planilla, el año y la fila de encabezados.');
-            if (saved.spreadsheetId && Number.isInteger(saved.year) && saved.credentialsConfigured) {
+            if (saved.spreadsheetId && Number.isInteger(saved.year) && saved.googleConnected) {
                 try { await checkCurrentConfig(); }
                 catch (error) { feedback(configStatus, `No se pudo comprobar la planilla: ${error.message}`, true); }
             }

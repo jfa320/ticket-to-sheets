@@ -59,6 +59,7 @@ class PdfPageRenderer {
             PDFRenderer renderer = new PDFRenderer(document);
             PdfTextExtractor textExtractor = new PdfTextExtractor();
             for (int pageIndex = 0; pageIndex < pageCount; pageIndex++) {
+                processor.beforePage(pageIndex + 1, pageCount);
                 validatePageDimensions(document.getPage(pageIndex));
                 if (nativeTextEnabled) {
                     OcrResult nativeText = null;
@@ -68,6 +69,9 @@ class PdfPageRenderer {
                         log.debug("No se pudo extraer texto nativo de página PDF {}; se usará OCR.", pageIndex + 1);
                     }
                     if (nativeText != null) {
+                        var preview = new PdfPreviewRenderer().render(renderer, document.getPage(pageIndex), pageIndex);
+                        nativeText = new OcrResult(nativeText.text(), nativeText.lines(), nativeText.detections(),
+                                nativeText.variant(), nativeText.score(), nativeText.pages(), preview);
                         processor.process(pageIndex + 1, pageCount, nativeText, null);
                         continue;
                     }
@@ -110,6 +114,8 @@ class PdfPageRenderer {
 
     @FunctionalInterface
     interface HybridPageProcessor {
+        default void beforePage() { }
+        default void beforePage(int pageNumber, int pageCount) { beforePage(); }
         void process(int pageNumber, int pageCount, OcrResult nativeText, BufferedImage image);
     }
 }

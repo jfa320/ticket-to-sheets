@@ -4,7 +4,6 @@ import com.opencode.facturas.model.ReceiptItem;
 import com.opencode.facturas.model.ReceiptDiscount;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.util.List;
 
 final class ReceiptTotalCalculator {
@@ -21,23 +20,26 @@ final class ReceiptTotalCalculator {
             if (item.precioUnitario().isBlank()) {
                 continue;
             }
-            BigDecimal unitPrice = BigDecimal.valueOf(amounts.parse(item.precioUnitario()));
-            BigDecimal quantity = BigDecimal.valueOf(amounts.parseQuantity(item.cantidad()).orElse(1.0));
+            BigDecimal unitPrice = ReceiptAmounts.decimal(item.precioUnitario(), true);
+            BigDecimal quantity = ReceiptAmounts.decimal(item.cantidad(), false);
             total = total.add(unitPrice.multiply(quantity));
         }
-        return amounts.format(total.setScale(2, RoundingMode.HALF_UP).doubleValue());
+        return format(total);
     }
 
     String discounts(List<ReceiptDiscount> discounts) {
         BigDecimal total = discounts.stream()
-                .map(discount -> BigDecimal.valueOf(amounts.parse(discount.importe())))
+                .map(discount -> ReceiptAmounts.decimal(discount.importe(), true))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
-        return amounts.format(total.doubleValue());
+        return format(total);
     }
 
     String net(String subtotal, String discountTotal) {
-        BigDecimal total = BigDecimal.valueOf(amounts.parse(subtotal))
-                .add(BigDecimal.valueOf(amounts.parse(discountTotal)));
-        return amounts.format(total.doubleValue());
+        BigDecimal total = ReceiptAmounts.decimal(subtotal, true).add(ReceiptAmounts.decimal(discountTotal, true));
+        return format(total);
+    }
+
+    private String format(BigDecimal amount) {
+        return amounts.format(amount);
     }
 }

@@ -11,6 +11,18 @@ import static org.mockito.Mockito.*;
 
 class CorrectionManagementTest {
     @TempDir Path directory;
+    @Test void editsPartialCorrectionsWithoutForcingUnrelatedDescriptionOrBrandValues() {
+        var file=directory.resolve("memory.json");var memory=new CorrectionMemory(new ObjectMapper(),file);
+        memory.upsert("Local", "leche", "Leche propia", "", "");
+        var entry=memory.list("",0,25).entries().get(0);
+        var named=memory.replace(new Edit(entry.store(),entry.firma(),entry.version(),"Nombre nuevo","",""));
+        assertThat(named.marca()).isEmpty();
+        var category=memory.replace(new Edit(named.store(),named.firma(),named.version(),"","","Mi categoría"));
+        assertThat(category.descripcion()).isEmpty();assertThat(category.marca()).isEmpty();
+        assertThatThrownBy(()->memory.replace(new Edit(category.store(),category.firma(),category.version(),"","","")))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("al menos");
+        assertThat(new CorrectionMemory(new ObjectMapper(),file).list("",0,25).entries()).containsExactly(category);
+    }
     @Test void searchesPagesReplacesGenericAndDeletesOnlyTheExactStore() {
         Path file = directory.resolve("memory.json");
         var memory = new CorrectionMemory(new ObjectMapper(), file);

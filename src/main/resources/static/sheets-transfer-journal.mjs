@@ -1,3 +1,5 @@
+import {sha256Hex} from './browser-crypto.mjs';
+
 const STORAGE_KEY = 'facturas.pendingSheetsTransfer';
 
 function sessionStorage() {
@@ -6,8 +8,7 @@ function sessionStorage() {
 
 async function fingerprint(payload) {
     const bytes = new TextEncoder().encode(JSON.stringify({destination: payload.destination, items: payload.items}));
-    const hash = await globalThis.crypto.subtle.digest('SHA-256', bytes);
-    return [...new Uint8Array(hash)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    return sha256Hex(bytes);
 }
 
 // Solo conserva el intento en curso: identificador, destino y huella, sin filas ni OCR.

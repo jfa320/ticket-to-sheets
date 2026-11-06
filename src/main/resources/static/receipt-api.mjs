@@ -1,3 +1,5 @@
+import {withRequestTimeout} from './request-timeout.mjs';
+
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
 export function validateFile(file) {
@@ -34,12 +36,12 @@ async function request(url, options, errorMessage) {
     return payload;
 }
 
-export function extractReceipt(file, {extractionId, signal} = {}) {
+export function extractReceipt(file, {extractionId, signal, searchBudgetSeconds = 8} = {}) {
     const data = new FormData();
     data.append('file', file);
     return request('/api/receipts/extract', {
         method: 'POST', body: data, signal,
-        headers: extractionId ? {'X-Extraction-Id': extractionId} : {}
+        headers: {...(extractionId ? {'X-Extraction-Id': extractionId} : {}), 'X-OCR-Search-Budget-Seconds':String(searchBudgetSeconds)}
     }, 'No se pudo procesar la factura.');
 }
 
@@ -48,8 +50,14 @@ export function cancellationUrl(extractionId) {
 }
 
 export function cancelReceipt(extractionId) {
-    return request(cancellationUrl(extractionId), {method: 'POST', keepalive: true},
-        'No se pudo cancelar el procesamiento anterior.');
+    return withRequestTimeout(signal => request(cancellationUrl(extractionId), {method: 'POST', keepalive: true, signal},
+        'No se pudo cancelar el procesamiento anterior.'),
+        {message:'No se pudo confirmar la cancelación a tiempo. Reintentá; se conserva el identificador del trabajo.'});
+}
+
+export function extractionProgress(extractionId, {signal} = {}) {
+    return withRequestTimeout(bounded => request(`/api/receipts/progress?${new URLSearchParams({extractionId})}`, {signal:bounded},
+        'No se pudo consultar el progreso.'), {signal, timeoutMs:5000});
 }
 
 export function saveCorrections(batch) {

@@ -25,6 +25,23 @@ class ReceiptHttpErrorsTest {
     @MockBean OcrService ocr;
     @MockBean ReceiptParserService parser;
 
+    @Test void progressAndCancellationRequireAnExtractionIdentifier() throws Exception {
+        mvc.perform(get("/api/receipts/progress")).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.requestId").isNotEmpty());
+        mvc.perform(post("/api/receipts/cancel")).andExpect(status().isBadRequest());
+        verifyNoInteractions(ocr, parser);
+    }
+
+    @Test void exhaustedPdfBudgetReturns408WithoutPartialProducts() throws Exception {
+        when(ocr.extract(any())).thenThrow(new com.opencode.facturas.service.ExtractionTimeoutException());
+        mvc.perform(multipart("/api/receipts/extract")
+                .file(new MockMultipartFile("file", "ticket.pdf", "application/pdf", new byte[]{1})))
+                .andExpect(status().isRequestTimeout()).andExpect(jsonPath("$.items").doesNotExist())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("No se devolvieron resultados parciales")))
+                .andExpect(jsonPath("$.requestId").isNotEmpty());
+        verifyNoInteractions(parser);
+    }
+
     @Test void missingRoutesReturn404InsteadOfInternalErrors() throws Exception {
         mvc.perform(get("/api/receipts")).andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.message").value("La ruta solicitada no existe."));

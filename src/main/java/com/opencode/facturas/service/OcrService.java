@@ -32,6 +32,8 @@ public class OcrService {
     private static final Logger log = LoggerFactory.getLogger(OcrService.class);
     private static final int PDF_SIGNATURE_SEARCH_BYTES = 1024;
     private static final long DEFAULT_MAX_IMAGE_PIXELS = 20_000_000L;
+    @Value("${app.ocr.search-budget-seconds:8}")
+    private int defaultSearchBudgetSeconds = 8;
     private static final int DEFAULT_MAX_IMAGE_SIDE = 10_000;
 
     private final OcrResultMapper resultMapper;
@@ -40,9 +42,40 @@ public class OcrService {
     private final long maxImagePixels;
     private final int maxImageSide;
     private final boolean nativePdfTextEnabled;
+    private final int pdfProcessingBudgetSeconds;
+    private final java.util.function.LongSupplier nanoTime;
     private final Object extractionMonitor = new Object();
     private final Map<String, Long> cancelledExtractions = new LinkedHashMap<>();
     private ExtractionTask activeExtraction;
+    private final Map<String, ProgressEntry> recentProgress = new LinkedHashMap<>();
+    private record ProgressEntry(com.opencode.facturas.model.ExtractionProgress value, long updatedAt) { }
+
+    public com.opencode.facturas.model.ExtractionProgress progress(String extractionId) {
+        validateExtractionId(extractionId);
+        synchronized (extractionMonitor) {
+            pruneProgress();
+            if (activeExtraction != null && extractionId.equals(activeExtraction.id)) return activeExtraction.progress();
+            var entry = recentProgress.get(extractionId);
+            return entry == null ? new com.opencode.facturas.model.ExtractionProgress("WAITING", "UPLOADING", 0, 0, 0) : entry.value();
+        }
+    }
+
+    public void finishExtraction(String extractionId, boolean success) {
+        if (extractionId == null) return;
+        synchronized (extractionMonitor) {
+            var previous = progress(extractionId);
+            if (success && cancelledExtractions.containsKey(extractionId)) throw new ExtractionCancelledException();
+            String state = cancelledExtractions.containsKey(extractionId) ? "CANCELLED" : success ? "COMPLETED" : "ERROR";
+            recentProgress.put(extractionId, new ProgressEntry(new com.opencode.facturas.model.ExtractionProgress(
+                    state, state, previous.pageNumber(), previous.pageCount(), previous.elapsedMillis()), System.currentTimeMillis()));
+            pruneProgress();
+        }
+    }
+
+    private void pruneProgress() {
+        recentProgress.values().removeIf(entry -> entry.updatedAt() < System.currentTimeMillis() - 300_000);
+        while (recentProgress.size() > 128) recentProgress.remove(recentProgress.keySet().iterator().next());
+    }
 
     @Autowired
     public OcrService(
@@ -58,7 +91,8 @@ public class OcrService {
             @Value("${app.upload.max-image-side:10000}") int maxImageSide,
             @Value("${app.pdf.max-pages:20}") int maxPdfPages,
             @Value("${app.pdf.max-page-pixels:20000000}") long maxPdfPagePixels,
-            @Value("${app.pdf.native-text-enabled:true}") boolean nativePdfTextEnabled
+            @Value("${app.pdf.native-text-enabled:true}") boolean nativePdfTextEnabled,
+            @Value("${app.pdf.processing-budget-seconds:300}") int pdfProcessingBudgetSeconds
     ) {
         this(
                 new OcrResultMapper(objectMapper),
@@ -75,7 +109,9 @@ public class OcrService {
                 new PdfPageRenderer(PdfPageRenderer.DEFAULT_DPI, maxPdfPages, maxPdfPagePixels),
                 maxImagePixels,
                 maxImageSide,
-                nativePdfTextEnabled
+                nativePdfTextEnabled,
+                pdfProcessingBudgetSeconds,
+                System::nanoTime
         );
     }
 
@@ -90,6 +126,12 @@ public class OcrService {
 
     OcrService(OcrResultMapper resultMapper, OcrApiClient apiClient, PdfPageRenderer pdfPageRenderer,
                long maxImagePixels, int maxImageSide, boolean nativePdfTextEnabled) {
+        this(resultMapper, apiClient, pdfPageRenderer, maxImagePixels, maxImageSide, nativePdfTextEnabled, 300, System::nanoTime);
+    }
+
+    OcrService(OcrResultMapper resultMapper, OcrApiClient apiClient, PdfPageRenderer pdfPageRenderer,
+               long maxImagePixels, int maxImageSide, boolean nativePdfTextEnabled, int pdfProcessingBudgetSeconds,
+               java.util.function.LongSupplier nanoTime) {
         if (maxImagePixels < 1 || maxImageSide < 1) {
             throw new IllegalArgumentException("Los límites de imagen deben ser positivos.");
         }
@@ -99,6 +141,11 @@ public class OcrService {
         this.maxImagePixels = maxImagePixels;
         this.maxImageSide = maxImageSide;
         this.nativePdfTextEnabled = nativePdfTextEnabled;
+        if (pdfProcessingBudgetSeconds < 1 || pdfProcessingBudgetSeconds > 3600) {
+            throw new IllegalArgumentException("El presupuesto total de PDF debe estar entre 1 y 3600 segundos.");
+        }
+        this.pdfProcessingBudgetSeconds = pdfProcessingBudgetSeconds;
+        this.nanoTime = nanoTime;
     }
 
     public String extractText(MultipartFile file) {
@@ -110,7 +157,7 @@ public class OcrService {
     }
 
     public OcrResult extract(MultipartFile file, String extractionId) {
-        return extract(file, extractionId, null);
+        return extract(file, extractionId, defaultSearchBudgetSeconds);
     }
 
     public OcrResult extract(MultipartFile file, String extractionId, Integer searchBudgetSeconds) {
@@ -122,9 +169,17 @@ public class OcrService {
         try {
             OcrResult result = extractFile(file, task);
             task.checkCancelled();
+            task.phase("PARSING");
             return result;
+        } catch (RuntimeException error) {
+            var previous = task.progress();
+            String state = error instanceof ExtractionCancelledException ? "CANCELLED" : "ERROR";
+            task.update(state, state, previous.pageNumber(), previous.pageCount());
+            throw error;
         } finally {
             synchronized (extractionMonitor) {
+                if (task.id != null) recentProgress.put(task.id, new ProgressEntry(task.progress(), System.currentTimeMillis()));
+                pruneProgress();
                 activeExtraction = null;
                 extractionMonitor.notifyAll();
             }
@@ -138,6 +193,8 @@ public class OcrService {
             cancelledExtractions.put(extractionId, System.currentTimeMillis());
             if (activeExtraction != null && extractionId.equals(activeExtraction.id)) {
                 activeExtraction.cancel();
+                var previous = activeExtraction.progress();
+                activeExtraction.update("CANCELLING", "CANCELLING", previous.pageNumber(), previous.pageCount());
             }
             extractionMonitor.notifyAll();
         }
@@ -153,7 +210,8 @@ public class OcrService {
                     throw new ExtractionCancelledException();
                 }
                 if (activeExtraction == null) {
-                    activeExtraction = new ExtractionTask(extractionId, searchBudgetSeconds);
+                    recentProgress.remove(extractionId);
+                    activeExtraction = new ExtractionTask(extractionId, searchBudgetSeconds, nanoTime);
                     return activeExtraction;
                 }
                 if (!activeExtraction.isCancelled()) throw new ExtractionBusyException();
@@ -206,7 +264,9 @@ public class OcrService {
             BufferedImage image = readImage(bytes);
             OcrResult result;
             try {
-                result = processImage(image, task);
+                boolean fastJpeg = task.searchBudgetSeconds != null && task.searchBudgetSeconds <= 10
+                        && bytes.length >= 3 && (bytes[0] & 255) == 255 && (bytes[1] & 255) == 216 && (bytes[2] & 255) == 255;
+                result = fastJpeg ? callPaddle(() -> apiClient.recognizeEncodedJpeg(bytes, task), task) : processImage(image, task);
             } finally {
                 image.flush();
             }
@@ -226,16 +286,25 @@ public class OcrService {
     }
 
     private OcrResult extractFromPdf(byte[] bytes, ExtractionTask task) {
+        task.startDeadline(pdfProcessingBudgetSeconds);
         log.info("Procesando páginas PDF: {} bytes, texto nativo={}", bytes.length, nativePdfTextEnabled);
         List<OcrResult> pages = new ArrayList<>();
-        pdfPageRenderer.forEachPage(bytes, nativePdfTextEnabled, (pageNumber, pageCount, nativeText, image) -> {
-            task.checkCancelled();
-            if (nativeText != null) {
-                log.info("Texto nativo de página PDF {}/{}: {} caracteres", pageNumber, pageCount, textLength(nativeText));
-                pages.add(nativeText);
-            } else {
-                log.info("Enviando página PDF {}/{} a OCR: {}x{} px", pageNumber, pageCount, image.getWidth(), image.getHeight());
-                pages.add(processImage(image, task));
+        pdfPageRenderer.forEachPage(bytes, nativePdfTextEnabled, new PdfPageRenderer.HybridPageProcessor() {
+            @Override public void beforePage(int page, int count) {
+                task.checkCancelled(); task.update("RUNNING", "READING_PDF", page, count);
+            }
+            @Override public void process(int pageNumber, int pageCount, OcrResult nativeText, BufferedImage image) {
+                task.checkCancelled();
+                if (nativeText != null) {
+                    task.update("RUNNING", "PDF_TEXT", pageNumber, pageCount);
+                    log.info("Texto nativo de página PDF {}/{}: {} caracteres", pageNumber, pageCount, textLength(nativeText));
+                    pages.add(nativeText);
+                } else {
+                    task.update("RUNNING", "OCR", pageNumber, pageCount);
+                    log.info("Enviando página PDF {}/{} a OCR: {}x{} px", pageNumber, pageCount, image.getWidth(), image.getHeight());
+                    pages.add(processImage(image, task));
+                }
+                task.checkCancelled();
             }
         });
         log.info("PDF renderizado y procesado: {} páginas", pages.size());
@@ -308,8 +377,14 @@ public class OcrService {
     }
 
     private OcrResult runPaddle(BufferedImage image, ExtractionTask task) {
+        return callPaddle(() -> task.id == null && task.searchBudgetSeconds == null && !task.hasDeadline()
+                ? apiClient.recognize(image) : apiClient.recognize(image, task), task);
+    }
+
+    private OcrResult callPaddle(java.util.function.Supplier<String> recognize, ExtractionTask task) {
         try {
-            String output = task.id == null && task.searchBudgetSeconds == null ? apiClient.recognize(image) : apiClient.recognize(image, task);
+            task.phase("OCR");
+            String output = recognize.get();
             task.checkCancelled();
             OcrResult result = resultMapper.parse(output);
             if (result.text() == null || result.text().isBlank()) {

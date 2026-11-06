@@ -1,0 +1,32 @@
+{
+  "name": "weight-and-repetitions",
+  "split": "development",
+  "provenance": "Texto ficticio; regresión de dominio, no fotografía privada ni conjunto reservado",
+  "ocr": {
+    "text": "MERCADO FICTICIO\nFecha 12/08/2026\n0,375 x 4000,00\nQUESO SARDO 1500,00\nAZUCAR RUBIA 1KG 900,00\nAZUCAR RUBIA 1KG 1100,00\nTOTAL 3500,00",
+    "lines": [],
+    "detections": []
+  },
+  "expected": {
+    "storeName": "Mercado Ficticio",
+    "date": "12/8/2026",
+    "total": "3500,00",
+    "items": [
+      {
+        "description": "Queso Sardo",
+        "quantity": "0,375",
+        "unitPrice": "4000,00"
+      },
+      {
+        "description": "Azucar Rubia 1kg",
+        "quantity": "1",
+        "unitPrice": "900,00"
+      },
+      {
+        "description": "Azucar Rubia 1kg",
+        "quantity": "1",
+        "unitPrice": "1100,00"
+      }
+    ]
+  }
+}

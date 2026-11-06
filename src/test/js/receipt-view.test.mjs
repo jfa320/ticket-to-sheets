@@ -15,7 +15,7 @@ test('pending filter preserves original row indices and the reviewed OCR warning
         assert.equal(body.children.length,1);
         assert.equal(body.children[0].children[1].dataset.index,'2');
         const actions = body.children[0].children.find(cell=>cell.dataset.label==='Acciones');
-        actions.children[0].listeners.click(); assert.equal(selected,items[2]);
+        actions.children[0].children[0].listeners.click(); assert.equal(selected,items[2]);
         renderItems(items,body,{});
         const labels = body.children[1].children.find(cell=>cell.dataset.label==='Estado').children.map(b=>b.textContent);
         assert.deepEqual(labels,['Ambiguo','Revisada']);

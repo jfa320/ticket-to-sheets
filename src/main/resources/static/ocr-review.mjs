@@ -110,7 +110,7 @@ export function createOcrReview(root = document) {
         page = pages[Number(picker.value)];
         if (!page) { viewport.classList.add('hidden'); return; }
         const visible = page.detections.filter(item => all.checked || item.doubtful || page.source === 'pdf-text');
-        el('PageStatus').textContent = page.source === 'pdf-text' ? 'Página con texto digital. No hay una imagen OCR para resaltar.'
+        el('PageStatus').textContent = page.source === 'pdf-text' ? 'Texto digital del PDF. Seleccioná una zona para verla en la página original.'
             : `${visible.length} zona(s) visibles de ${page.detections.length}. La imagen corresponde a la lectura procesada.`;
         el('Empty').textContent = page.detections.length ? 'No hay zonas dudosas en esta página. Podés mostrar todas las zonas.' : 'No hay zonas detectadas para revisar.';
         el('Empty').classList.toggle('hidden', visible.length > 0);

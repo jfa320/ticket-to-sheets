@@ -20,6 +20,9 @@ public class BrandCatalog {
     private final BrandCatalogStore store;
     private final Set<String> brands = new LinkedHashSet<>();
     private final BrandCatalogMatcher matcher;
+    synchronized java.util.List<String> snapshot() { return brands.stream().sorted(String.CASE_INSENSITIVE_ORDER).toList(); }
+    synchronized void applySnapshot(java.util.List<String> values) { brands.clear(); brands.addAll(values); matcher.refresh(); }
+    Path path() { return store.path(); }
 
     @Autowired
     public BrandCatalog(ObjectMapper objectMapper) {
@@ -64,8 +67,8 @@ public class BrandCatalog {
         }
         boolean exists = brands.stream().anyMatch(existing -> BrandCatalogMatcher.normalize(existing).equals(normalized));
         if (!exists) {
-            brands.add(cleaned);
-            store.save(brands);
+            var next = new LinkedHashSet<>(brands); next.add(cleaned);
+            store.save(next); brands.add(cleaned); matcher.refresh();
         }
     }
 

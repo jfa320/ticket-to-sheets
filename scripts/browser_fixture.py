@@ -9,6 +9,8 @@ import base64
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 import json
+import time
+from urllib.parse import parse_qs, urlsplit
 from pathlib import Path
 import urllib.error
 import urllib.request
@@ -38,6 +40,24 @@ def make_receipt():
         'imageDataUrl':'data:image/jpeg;base64,'+base64.b64encode(data.getvalue()).decode('ascii')}}
 
 
+def make_digital_pdf():
+    """PDF textual ficticio mínimo, sin depender de un generador externo."""
+    lines = ['COMERCIO DIGITAL FICTICIO', 'Fecha 15/10/2026', 'LECHE ENTERA 1200,00',
+             'PAN INTEGRAL 800,00', 'TOTAL 2000,00']
+    content = ('BT /F1 16 Tf 40 380 Td ' + ' 0 -35 Td '.join(f'({line}) Tj' for line in lines) + ' ET').encode('ascii')
+    objects = [b'<< /Type /Catalog /Pages 2 0 R >>', b'<< /Type /Pages /Count 1 /Kids [3 0 R] >>',
+        b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 420] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+        b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+        b'<< /Length ' + str(len(content)).encode('ascii') + b' >>\nstream\n' + content + b'\nendstream']
+    output = bytearray(b'%PDF-1.4\n'); offsets = [0]
+    for index, value in enumerate(objects, 1):
+        offsets.append(len(output)); output.extend(f'{index} 0 obj\n'.encode('ascii') + value + b'\nendobj\n')
+    xref = len(output); output.extend(f'xref\n0 {len(offsets)}\n0000000000 65535 f \n'.encode('ascii'))
+    for offset in offsets[1:]: output.extend(f'{offset:010} 00000 n \n'.encode('ascii'))
+    output.extend(f'trailer << /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n'.encode('ascii'))
+    return bytes(output)
+
+
 class Fixture:
     def __init__(self,backend):
         self.backend=backend
@@ -48,10 +68,12 @@ class Fixture:
         self.fail_status=0
         self.fail_corrections=0
         self.lose_append=False
+        self.ocr_delay=0
+        self.cancelled=set()
         self.ocr=make_receipt()[1]
         self.config={'spreadsheetId':SHEET_ID,'spreadsheetUrl':f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit',
             'year':2026,'headerRow':2,'monthSheets':{'10':'Octubre'},'configVersion':'fixture-v1',
-            'credentialsConfigured':True,'serviceAccountEmail':'fixture@example.invalid'}
+            'googleConnected':True,'oauthConfigured':True}
 
 
 def handler_for(fixture):
@@ -60,17 +82,28 @@ def handler_for(fixture):
         def respond(self,status,payload,content_type='application/json'):
             data=payload if isinstance(payload,bytes) else json.dumps(payload,ensure_ascii=False).encode('utf-8')
             self.send_response(status);self.send_header('Content-Type',content_type+'; charset=utf-8')
-            self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
+            self.send_header('Content-Length',str(len(data)));self.end_headers()
+            try:self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError):pass
         def route(self):
             path=self.path.split('?',1)[0]
             body=self.rfile.read(int(self.headers.get('Content-Length','0')))
             if path=='/health':return self.respond(200,{'ocrReady':True,'ocrBusy':False})
-            if path=='/ocr':return self.respond(200,fixture.ocr)
+            if path=='/ocr/cancel':
+                identifier=parse_qs(urlsplit(self.path).query).get('extractionId',[''])[0]
+                fixture.cancelled.add(identifier);return self.respond(200,{'cancelled':True})
+            if path=='/ocr':
+                identifier=self.headers.get('X-Extraction-Id')
+                deadline=time.monotonic()+fixture.ocr_delay
+                while time.monotonic()<deadline and identifier not in fixture.cancelled:time.sleep(.03)
+                if identifier in fixture.cancelled:return self.respond(409,{'error':'Extracción cancelada en el fixture.'})
+                return self.respond(200,fixture.ocr)
             if path=='/__test__/control' and self.command=='POST':
                 data=json.loads(body)
                 fixture.fail_status=int(data.get('failStatus',fixture.fail_status))
                 fixture.fail_corrections=int(data.get('failCorrections',fixture.fail_corrections))
                 fixture.lose_append=bool(data.get('loseAppend',fixture.lose_append))
+                fixture.ocr_delay=max(0,min(10,float(data.get('ocrDelay',fixture.ocr_delay))))
                 return self.respond(200,{'configured':True})
             if path=='/__test__/state':
                 return self.respond(200,{'writes':len(fixture.writes),'appendCalls':fixture.append_calls,
@@ -124,6 +157,7 @@ def main():
     output=ROOT/'test-data/browser-e2e';output.mkdir(parents=True,exist_ok=True)
     image,_=make_receipt();image.save(output/'receipt.png')
     image.save(output/'two-pages.pdf',save_all=True,append_images=[image],resolution=72)
+    (output/'digital.pdf').write_bytes(make_digital_pdf())
     print(f'Fixture E2E: http://127.0.0.1:{args.port} (destino Sheets sintético)',flush=True)
     ThreadingHTTPServer(('127.0.0.1',args.port),handler_for(Fixture(args.backend))).serve_forever()
 
