@@ -10,6 +10,7 @@ from io import BytesIO
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import numpy as np
 from PIL import Image, ImageDraw
 
 OCR_ROOT = Path(__file__).resolve().parents[1]
@@ -160,6 +161,36 @@ class OcrServiceTest(unittest.TestCase):
         self.assertEqual(self.service.OCR_MAX_REGION_SIDE,
                          self.service.PaddleOCR.call_args.kwargs["det_limit_side_len"])
 
+    def test_in_memory_pixels_match_lossless_png_decoding_for_all_candidate_modes(self):
+        from preprocess import load_cv2
+        cv2 = load_cv2()
+        if cv2 is None:
+            self.skipTest("OpenCV is not installed")
+        rgb = Image.fromarray(np.random.default_rng(42).integers(0, 256, (47, 63, 3), dtype=np.uint8))
+        for image in (rgb, rgb.convert("L"), rgb.convert("1")):
+            with self.subTest(mode=image.mode):
+                encoded = BytesIO()
+                image.save(encoded, format="PNG")
+                decoded = cv2.imdecode(np.frombuffer(encoded.getvalue(), dtype=np.uint8), cv2.IMREAD_COLOR)
+                pixels = self.service.paddle_image(image)
+                np.testing.assert_array_equal(decoded, pixels)
+                self.assertTrue(pixels.flags.c_contiguous)
+                self.assertTrue(pixels.flags.writeable)
+
+    def test_native_read_keeps_source_pixels_independent_and_avoids_image_encoding(self):
+        image = Image.new("RGB", (10, 20), (195, 230, 210))
+        model = Mock()
+        def recognize(pixels, cls):
+            self.assertEqual((20, 10, 3), pixels.shape)
+            self.assertEqual([210, 230, 195], pixels[0, 0].tolist())
+            self.assertFalse(cls)
+            pixels[:] = 0
+            return []
+        model.ocr.side_effect = recognize
+        with patch.object(Image.Image, "save", side_effect=AssertionError("No PNG encoding")):
+            self.assertEqual([], self.service.recognize_block(model, image))
+        self.assertEqual((195, 230, 210), image.getpixel((0, 0)))
+
     def test_budget_returns_best_completed_reading_without_starting_another_pass(self):
         image = Image.new("RGB", (200, 100), "white")
         weak = [detection("LECH3 1200,00", 10, 30, 0.65)]
@@ -271,10 +302,9 @@ class OcrServiceTest(unittest.TestCase):
         ])
         seen = []
 
-        def recognize(path, cls):
-            with Image.open(path) as region:
-                seen.append((path, region.size))
-                self.assertEqual((195, 230, 210), region.getpixel((0, 0)))
+        def recognize(pixels, cls):
+            seen.append((pixels.shape[1], pixels.shape[0]))
+            self.assertEqual([210, 230, 195], pixels[0, 0].tolist())
             self.assertFalse(cls)
             return [next(responses)]
 
@@ -282,8 +312,7 @@ class OcrServiceTest(unittest.TestCase):
         model.ocr.side_effect = recognize
         detections, lines = self.service.ocr_image(model, image)
 
-        self.assertEqual([(400, 1400), (400, 560)], [size for _, size in seen])
-        self.assertTrue(all(not os.path.exists(path) for path, _ in seen))
+        self.assertEqual([(400, 1400), (400, 560)], seen)
         self.assertEqual(["LECHE 1200,00"], [line["text"] for line in lines])
         self.assertEqual(1300, detections[0]["top"])
         self.assertEqual([[10.0, 1300.0], [180.0, 1300.0], [180.0, 1320.0], [10.0, 1320.0]],
@@ -649,14 +678,12 @@ class OcrServiceTest(unittest.TestCase):
         finally:
             del self.service.OCR_REQUEST_CONTEXT.cancelled
 
-    def test_cancelled_native_read_cleans_up_its_temporary_image(self):
+    def test_cancelled_native_read_discards_the_completed_result(self):
         cancelled = threading.Event()
         self.service.OCR_REQUEST_CONTEXT.cancelled = cancelled
-        paths = []
 
-        def recognize(path, **kwargs):
-            paths.append(path)
-            self.assertTrue(os.path.isfile(path))
+        def recognize(pixels, **kwargs):
+            self.assertIsInstance(pixels, np.ndarray)
             cancelled.set()
             return []
 
@@ -666,7 +693,6 @@ class OcrServiceTest(unittest.TestCase):
             with self.assertRaises(self.service.OcrCancelled):
                 self.service.recognize_block(model, Image.new("RGB", (10, 10), "white"))
             self.assertEqual(1, model.ocr.call_count)
-            self.assertFalse(os.path.exists(paths[0]))
         finally:
             del self.service.OCR_REQUEST_CONTEXT.cancelled
 

@@ -14,6 +14,28 @@ from image_variants import MAX_PIXELS, MAX_SHORT_SIDE, build_variants, crop_rece
 
 
 class ImageVariantsTest(unittest.TestCase):
+    def test_orientation_probe_defers_full_resize_without_changing_full_candidate(self):
+        image = Image.new("RGB", (1600, 2400), (230, 240, 220))
+        ImageDraw.Draw(image).rectangle((25, 50, 400, 150), fill=(40, 70, 90))
+        expected = limit_image_size(image.rotate(90, expand=True))
+        with patch("image_variants.limit_image_size", wraps=limit_image_size) as limit:
+            candidates = build_variants(image, rotations=(90,), probe_orientation=True, with_metadata=True)
+            name, probe, metadata = next(candidates)
+            self.assertEqual("probe-rot90", name)
+            self.assertTrue(metadata["probe"])
+            self.assertEqual(1, limit.call_count)
+            oriented = limit.call_args.args[0]
+            limit.assert_called_once_with(oriented, 700, 1_000_000)
+
+            name, full, metadata = next(candidates)
+            self.assertEqual(2, limit.call_count)
+            limit.assert_called_with(oriented)
+            self.assertEqual("original-rot90", name)
+            self.assertEqual({"frame": "full:90", "size": expected.size}, metadata)
+            self.assertEqual(expected.size, full.size)
+            self.assertEqual(expected.tobytes(), full.tobytes())
+            candidates.close()
+
     def test_small_orientation_probe_is_bounded_and_does_not_replace_full_candidate(self):
         image = Image.new("RGB", (1600, 2400), "white")
         candidates = build_variants(image, rotations=(90,), probe_orientation=True, with_metadata=True)

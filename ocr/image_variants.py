@@ -111,7 +111,6 @@ def build_variants(image, debug_dir=None, save_debug_image=None, document_correc
         suffix = "original" if rotation == 0 else f"rot{rotation}"
 
         # Preserve color and faint printing even if cropping/contrast is harmful.
-        bounded_original = limit_image_size(oriented)
         full_frame, crop_frame, geometry_frame = f"full:{rotation}", f"crop:{rotation}", f"geometry:{rotation}"
         if probe_orientation:
             probe = limit_image_size(oriented, 700, 1_000_000)
@@ -119,6 +118,9 @@ def build_variants(image, debug_dir=None, save_debug_image=None, document_correc
                 yield f"probe-{suffix}", probe, {"frame": full_frame, "size": probe.size, "probe": True}
             else:
                 yield f"probe-{suffix}", probe
+        # An orientation probe may be the only candidate requested from this
+        # generator. Defer the full-size resize until its reading is requested.
+        bounded_original = limit_image_size(oriented)
         yield pack(f"original-{suffix}", bounded_original, full_frame)
 
         if document_corrections and prioritize_corrections:

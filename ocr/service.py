@@ -7,7 +7,6 @@ import math
 import os
 import shutil
 import tarfile
-import tempfile
 import time
 import traceback
 import threading
@@ -22,6 +21,7 @@ os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 
 from flask import Flask, jsonify, request
+import numpy as np
 import paddle
 from paddleocr import PaddleOCR
 from PIL import Image, ImageDraw, ImageOps, ImageFont
@@ -154,6 +154,12 @@ def save_debug_image(debug_dir, relative_path, image):
     image.save(path, format="PNG")
 
 
+def paddle_image(image):
+    """Match lossless PNG decoding (BGR), without encoding or temporary files."""
+    rgb = image if image.mode == "RGB" else image.convert("RGB")
+    return np.ascontiguousarray(np.asarray(rgb)[:, :, ::-1])
+
+
 def warm_ocr(engine):
     """Preparar los operadores con texto ficticio antes de publicar el motor."""
     warm = Image.new('RGB',(960,1280),'white')
@@ -162,10 +168,8 @@ def warm_ocr(engine):
     draw=ImageDraw.Draw(warm)
     for index,text in enumerate(('COMERCIO FICTICIO','FECHA 29/10/2026','PRODUCTO DE PRUEBA 1200,00','TOTAL 1200,00')):
         draw.text((40,40+index*50),text,font=font,fill='black')
-    with tempfile.NamedTemporaryFile(suffix='.png',delete=False) as temporary:
-        warm.save(temporary,format='PNG'); warm_path=temporary.name
-    try: engine.ocr(warm_path,cls=False)
-    finally: os.remove(warm_path); warm.close()
+    try: engine.ocr(paddle_image(warm),cls=False)
+    finally: warm.close()
 
 
 def get_ocr(language):
@@ -326,17 +330,9 @@ def draw_overlay(image, detections):
 
 def recognize_block(ocr, image):
     check_cancelled()
-    temp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as temp_file:
-            image.save(temp_file, format="PNG")
-            temp_path = temp_file.name
-        result = ocr.ocr(temp_path, cls=False)
-        check_cancelled()
-        return extract_detections(result)
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            os.remove(temp_path)
+    result = ocr.ocr(paddle_image(image), cls=False)
+    check_cancelled()
+    return extract_detections(result)
 
 
 def ocr_image(ocr, image):
