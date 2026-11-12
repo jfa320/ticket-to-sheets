@@ -161,6 +161,16 @@ class OcrServiceTest(unittest.TestCase):
         self.assertEqual(self.service.OCR_MAX_REGION_SIDE,
                          self.service.PaddleOCR.call_args.kwargs["det_limit_side_len"])
 
+    def test_missing_description_reread_uses_recognition_without_detection(self):
+        model = Mock()
+        model.ocr.return_value = [[("PRODUCTO DE PRUEBA", .94)]]
+        reading = self.service.recognize_text_line(model, Image.new("RGB", (300, 40), "white"))
+        self.assertEqual(("PRODUCTO DE PRUEBA", .94), reading)
+        self.assertFalse(model.ocr.call_args.kwargs["det"])
+        self.assertFalse(model.ocr.call_args.kwargs["cls"])
+        model.ocr.return_value = [[]]
+        self.assertIsNone(self.service.recognize_text_line(model, Image.new("RGB", (300, 40), "white")))
+
     def test_in_memory_pixels_match_lossless_png_decoding_for_all_candidate_modes(self):
         from preprocess import load_cv2
         cv2 = load_cv2()

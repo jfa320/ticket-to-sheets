@@ -1,4 +1,5 @@
 import {createLearningBackup} from './learning-backup.mjs';
+import {createCategorySelect} from './category-suggestions.mjs';
 
 export async function correctionRequest(method, data, fetcher = fetch) {
     const query = method === 'GET' ? `?${new URLSearchParams(data)}` : '';
@@ -72,11 +73,15 @@ export function createCorrectionManager({root = document, beforeOpen = async () 
         signature.textContent = `Línea OCR: ${entry.firma}`; fields.append(signature);
         const inputs = {};
         for (const [key, label] of [['descripcion', 'Descripción'], ['marca', 'Marca'], ['categoria', 'Categoría']]) {
-            const wrapper = root.createElement('label'), input = root.createElement('input');
-            input.type = 'text'; input.defaultValue = input.value = entry[key] || ''; input.maxLength = 1000;
-            input.placeholder = 'Sin corrección para este campo';
+            const wrapper = root.createElement('label');
+            const input = key === 'categoria' ? createCategorySelect(entry[key], {root, allowEmpty: true})
+                : root.createElement('input');
+            if (key !== 'categoria') {
+                input.type = 'text'; input.defaultValue = input.value = entry[key] || ''; input.maxLength = 1000;
+                input.placeholder = 'Sin corrección para este campo';
+            }
             wrapper.append(root.createTextNode(label), input); fields.append(wrapper); inputs[key] = input;
-            input.addEventListener('input', () => { form.dataset.dirty = 'true'; refreshDirty(); });
+            input.addEventListener(key === 'categoria' ? 'change' : 'input', () => { form.dataset.dirty = 'true'; refreshDirty(); });
         }
         const actions = root.createElement('div'); actions.className = 'correction-actions';
         const save = root.createElement('button'); save.type = 'submit'; save.textContent = 'Guardar cambios';

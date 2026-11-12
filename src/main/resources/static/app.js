@@ -9,11 +9,9 @@ import {renderItems, renderWarnings, renderDiscounts, markInvalidCells} from './
 import {createOcrReview} from './ocr-review.mjs';
 import {createSheetsPanel} from './receipt-sheets.mjs?v=4';
 import {createCorrectionManager} from './correction-manager.mjs';
-import {loadCategories} from './category-suggestions.mjs';
 import {copyToClipboard} from './receipt-clipboard.mjs';
 
 const byId = id => document.getElementById(id);
-void loadCategories().catch(() => {});
 const form = byId('uploadForm');
 const fileInput = byId('fileInput');
 const status = byId('status');
@@ -349,7 +347,7 @@ function addManualItem() {
         descripcion: '',
         marca: '',
         lugarDeCompra: receipt.storeName || baseItem.lugarDeCompra || '',
-        categoria: baseItem.categoria || '',
+        categoria: baseItem.categoria || 'Otros',
         cantidad: '',
         precioUnitario: '',
         fecha: receipt.date || baseItem.fecha || '',

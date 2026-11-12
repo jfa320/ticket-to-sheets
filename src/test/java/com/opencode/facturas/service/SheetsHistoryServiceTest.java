@@ -150,14 +150,14 @@ class SheetsHistoryServiceTest {
     @Test void explicitManualMemoryWinsOverHistoryWithoutAddingHistoricalWarnings() {
         service.sync(destination);
         CorrectionMemory memory = new CorrectionMemory(mapper, directory.resolve("corrections.json"));
-        memory.upsert("Comercio prueba", "jabon neutro 500g marca prueba", "Descripción manual", "Marca manual", "Categoría manual");
+        memory.upsert("Comercio prueba", "jabon neutro 500g marca prueba", "Descripción manual", "Marca manual", "Farmacia");
         var parser = new ReceiptParserService(StoreNameMapper.empty(), new BrandCatalog(mapper, directory.resolve("brands.json")), memory, service);
         var result = parser.parse("COMERCIO PRUEBA\nFECHA 04/10/2026\nJABON NEUTRO 500G MARCA PRUEBA 1000,00");
         assertThat(result.items()).hasSize(1);
         assertThat(result.items().get(0).estado()).isEqualTo("LEARNED");
         assertThat(result.items().get(0).descripcion()).isEqualTo("Descripción manual");
         assertThat(result.items().get(0).marca()).isEqualTo("Marca manual");
-        assertThat(result.items().get(0).categoria()).isEqualTo("Categoría manual");
+        assertThat(result.items().get(0).categoria()).isEqualTo("Farmacia");
         assertThat(result.warnings()).noneMatch(warning -> warning.contains("historial"));
     }
 

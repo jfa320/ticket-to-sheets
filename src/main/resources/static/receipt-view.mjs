@@ -1,4 +1,5 @@
 import {COLUMNS, parseLocalizedNumber} from './receipt-model.mjs';
+import {createCategorySelect} from './category-suggestions.mjs';
 
 function rowAction(label, rowNumber, icon) {
     const button = document.createElement('button');
@@ -94,13 +95,10 @@ export function renderItems(items, body, {onEdit, onSelect, onRemove, onReview, 
             cell.className = 'editable-cell';
             cell.dataset.label = label;
             if (field === 'categoria') {
-                const input = document.createElement('input');
-                input.type = 'text';
-                input.setAttribute('list', 'categorySuggestions');
+                const input = createCategorySelect(item[field]);
                 input.className = 'editable-input';
-                input.value = item[field] ?? '';
                 input.setAttribute('aria-label', `${label}, fila ${index + 1}`);
-                input.addEventListener('input', () => edited(field, input.value.trim()));
+                input.addEventListener('change', () => edited(field, input.value));
                 cell.append(input);
             } else {
                 cell.textContent = item[field] ?? '';

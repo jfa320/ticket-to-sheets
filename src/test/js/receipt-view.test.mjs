@@ -2,6 +2,27 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {renderItems} from '../../main/resources/static/receipt-view.mjs';
 
+test('category changes use a constrained select and notify the normal editing flow', () => {
+    const previous = globalThis.document;
+    const node = tag => ({tagName: tag, children: [], dataset: {}, attributes: {}, listeners: {},
+        classList: {toggle() {}}, append(child) { this.children.push(child); }, replaceChildren() { this.children = []; },
+        setAttribute(key, value) { this.attributes[key] = value; }, addEventListener(key, callback) { this.listeners[key] = callback; },
+        querySelector() { return null; }});
+    globalThis.document = {createElement: node};
+    try {
+        const body = node('tbody'), item = {categoria: 'Otros'};
+        let edits = 0;
+        renderItems([item], body, {onEdit(row, field, value) { row[field] = value; edits++; }});
+        const select = body.children[0].children.find(cell => cell.dataset.field === 'categoria').children[0];
+        assert.equal(select.tagName, 'select');
+        assert.equal(select.attributes['aria-label'], 'Categoria, fila 1');
+        assert.equal(select.children.length, 9);
+        select.value = 'Kiosco'; select.listeners.change();
+        assert.equal(item.categoria, 'Kiosco');
+        assert.equal(edits, 1);
+    } finally { globalThis.document = previous; }
+});
+
 test('pending filter preserves original row indices and the reviewed OCR warning', () => {
     const previous = globalThis.document;
     const node = () => ({children: [], dataset: {}, className: '', textContent: '', attributes: {}, listeners: {},

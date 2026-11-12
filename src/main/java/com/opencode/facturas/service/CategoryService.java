@@ -9,12 +9,13 @@ import java.nio.file.*;
 import java.io.IOException;
 import java.util.*;
 
-/** Reglas locales opcionales; la memoria y el historial conservan su prioridad. */
+/** Reglas locales dentro del catálogo de categorías admitido por la planilla. */
 @Service
 public class CategoryService {
     private final ObjectMapper mapper;
     private final Path path;
     private final Config defaults;
+    private final List<String> available;
     private Config cached;
     private String fileVersion = "";
     private record Rule(String store, String category, List<String> keywords) { }
@@ -26,7 +27,11 @@ public class CategoryService {
     public CategoryService(ObjectMapper mapper, Path path) {
         this.mapper = mapper; this.path = path;
         try (var stream = CategoryService.class.getResourceAsStream("/category-defaults.json")) {
-            defaults = validate(mapper.readTree(stream)); cached = defaults;
+            var root = mapper.readTree(stream);
+            var catalog = new LinkedHashSet<String>();
+            root.path("categories").forEach(value -> catalog.add(text(value)));
+            available = List.copyOf(catalog);
+            defaults = validate(root); cached = defaults;
         } catch (IOException ex) { throw new IllegalStateException("No se pudo leer la configuración base de categorías.", ex); }
     }
     public static CategoryService defaults() { return new CategoryService(new ObjectMapper(), (Path) null); }
@@ -36,9 +41,25 @@ public class CategoryService {
         String storeKey = normalize(store), text = " " + normalize(description) + " ";
         for (var rule : config.rules()) if ((rule.store().isEmpty() || rule.store().equals(storeKey))
                 && rule.keywords().stream().anyMatch(keyword -> text.contains(" " + keyword + " "))) return rule.category();
+        if ((" " + storeKey + " ").contains(" ferreteria ")) return "Otros";
         return config.stores().getOrDefault(storeKey, config.fallback());
     }
     public List<String> suggestions() { return current().suggestions(); }
+
+    public String canonical(String category) {
+        String key = normalize(category == null ? "" : category);
+        return available.stream().filter(value -> normalize(value).equals(key)).findFirst().orElseGet(() ->
+                switch (key) {
+                    case "lacteos", "almacen", "galletitas" -> "Supermercado";
+                    default -> "Otros";
+                });
+    }
+
+    private String configuredCategory(JsonNode value) {
+        String category = text(value), key = normalize(category);
+        return available.stream().filter(option -> normalize(option).equals(key)).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Categoría no disponible: " + category + "."));
+    }
 
     private synchronized Config current() {
         if (path == null || !Files.exists(path)) return defaults;
@@ -55,15 +76,15 @@ public class CategoryService {
         fields(root, Set.of("schemaVersion", "fallback", "categories", "stores", "productRules"));
         if (!root.path("schemaVersion").isIntegralNumber() || root.path("schemaVersion").asInt() != 1)
             throw new IllegalArgumentException("Versión de categorías inválida.");
-        String fallback = text(root.path("fallback"));
-        var suggestions = new LinkedHashSet<String>(); suggestions.add(fallback);
+        String fallback = configuredCategory(root.path("fallback"));
+        var suggestions = new LinkedHashSet<>(available);
         var categories = root.path("categories");
         if (!categories.isArray() || categories.size() > 100) throw new IllegalArgumentException("Categorías inválidas.");
-        categories.forEach(value -> suggestions.add(text(value)));
+        categories.forEach(this::configuredCategory);
         var stores = new LinkedHashMap<String, String>();
         if (!root.path("stores").isObject() || root.path("stores").size() > 200) throw new IllegalArgumentException("Comercios inválidos.");
         root.path("stores").fields().forEachRemaining(entry -> {
-            String key = normalize(entry.getKey()), category = text(entry.getValue());
+            String key = normalize(entry.getKey()), category = configuredCategory(entry.getValue());
             if (key.isBlank() || key.length() > 200 || stores.putIfAbsent(key, category) != null)
                 throw new IllegalArgumentException("Comercio vacío o repetido en categorías.");
             suggestions.add(category);
@@ -73,7 +94,7 @@ public class CategoryService {
             throw new IllegalArgumentException("Reglas de categoría inválidas.");
         for (var rule : root.path("productRules")) {
             fields(rule, Set.of("store", "category", "keywords"));
-            String category = text(rule.path("category"));
+            String category = configuredCategory(rule.path("category"));
             String store = rule.has("store") ? normalize(text(rule.path("store"))) : "";
             if (rule.has("store") && store.isBlank()) throw new IllegalArgumentException("Comercio inválido en la regla de categoría.");
             if (!rule.path("keywords").isArray() || rule.path("keywords").isEmpty() || rule.path("keywords").size() > 30)

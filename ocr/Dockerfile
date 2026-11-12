@@ -33,6 +33,7 @@ COPY ocr/synthetic_corpus.py ./synthetic_corpus.py
 COPY ocr/receipt_metrics.py ./receipt_metrics.py
 COPY ocr/ocr_regions.py ./ocr_regions.py
 COPY ocr/targeted_retry.py ./targeted_retry.py
+COPY ocr/missing_descriptions.py ./missing_descriptions.py
 COPY ocr/variant_fusion.py ./variant_fusion.py
 COPY ocr/preview.py ./preview.py
 COPY ocr/model_paths.py ./model_paths.py

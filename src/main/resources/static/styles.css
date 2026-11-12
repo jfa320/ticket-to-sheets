@@ -711,6 +711,7 @@ th {
 .editable-input {
     width: 100%;
     min-width: 95px;
+    min-height: 44px;
     box-sizing: border-box;
     border: 1px solid transparent;
     border-radius: 6px;
@@ -1249,7 +1250,7 @@ textarea {
 .corrections-dialog::backdrop { background: rgba(15, 23, 42, .42); }
 .corrections-dialog fieldset { border: 1px solid var(--line); border-radius: 12px; min-width: 0; padding: 16px; }
 .corrections-dialog label { display: grid; gap: 6px; margin-bottom: 12px; }
-.corrections-dialog input { min-width: 0; width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; font: inherit; background: var(--panel); color: var(--ink); }
+.corrections-dialog input, .corrections-dialog select { min-width: 0; width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; font: inherit; background: var(--panel); color: var(--ink); }
 .corrections-list { display: grid; gap: 16px; margin-bottom: 16px; }
 .correction-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .corrections-dialog .helper { overflow-wrap: anywhere; }

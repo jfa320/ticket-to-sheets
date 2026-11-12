@@ -31,6 +31,7 @@ from ocr_regions import recognize_regions
 from receipt_layout import merge_boxes_into_rows
 from scoring import score_lines
 from targeted_retry import refine_detections
+from missing_descriptions import recover_missing_descriptions
 from variant_fusion import fuse_detections
 from preview import build_preview
 from model_paths import model_path_options
@@ -335,6 +336,13 @@ def recognize_block(ocr, image):
     return extract_detections(result)
 
 
+def recognize_text_line(ocr, image):
+    check_cancelled()
+    result = ocr.ocr(paddle_image(image), det=False, cls=False)
+    check_cancelled()
+    return result[0][0] if result and result[0] else None
+
+
 def ocr_image(ocr, image):
     detections = recognize_regions(
         image,
@@ -491,6 +499,15 @@ def run_best_ocr(image, language, debug_dir=None, preview_sink=None):
                 detail = image if rotation == 0 else image.rotate(rotation, expand=True)
                 if abs(detail.width / detail.height - best_variant.width / best_variant.height) < .01:
                     retry_options["detail_image"] = detail
+            recovered, description_statistics = recover_missing_descriptions(
+                best_variant, best_detections, lambda region: recognize_text_line(ocr, region), **retry_options
+            )
+            retry_summary["missingDescriptions"] = description_statistics
+            if description_statistics["acceptedRegions"]:
+                best_detections = recovered
+                best_lines = merge_boxes_into_rows(recovered)
+                best_score = score_lines(best_lines)
+                best_name += "+descriptions"
             refined, statistics = refine_detections(
                 best_variant, best_detections, lambda region: recognize_block(ocr, region), **retry_options
             )

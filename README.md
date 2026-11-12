@@ -262,17 +262,19 @@ Las correcciones pueden ser parciales: dejá un campo vacío para conservar el v
 
 ## Categorías locales
 
-Copiá `src/main/resources/category-defaults.json` a `data/categories.json` y editá esa copia. No hace falta cambiar Java ni reiniciar: el backend relee los cambios en la siguiente extracción; recargá la página para actualizar las sugerencias de la tabla. En Docker el archivo usa el volumen `./data:/app/data`. `APP_CATEGORIES_PATH` permite elegir otra ruta.
+Las categorías disponibles son únicamente: `Limpieza`, `Supermercado`, `Farmacia`, `Kiosco`, `Carne`, `Otros`, `Verduleria`, `Perfumeria` y `Panaderia`. La tabla y el administrador de correcciones usan selectores con esas opciones. Las compras de ferretería se asignan por defecto a `Otros`.
 
-`categories` define sugerencias, `stores` asocia comercios con categorías y `fallback` se usa cuando no hay coincidencia. `productRules` admite reglas en orden; alcanza con que una palabra o frase completa de `keywords` aparezca en la descripción. `store` es opcional y restringe la regla a ese comercio normalizado. Ejemplo:
+Para ajustar las reglas, copiá `src/main/resources/category-defaults.json` a `data/categories.json` y editá esa copia. No hace falta cambiar Java ni reiniciar: el backend relee los cambios en la siguiente extracción. En Docker el archivo usa el volumen `./data:/app/data`. `APP_CATEGORIES_PATH` permite elegir otra ruta.
+
+`stores` asocia comercios con categorías y `fallback` se usa cuando no hay coincidencia. `categories` y las reglas solo admiten valores del catálogo anterior. `productRules` admite reglas en orden; alcanza con que una palabra o frase completa de `keywords` aparezca en la descripción. `store` es opcional y restringe la regla a ese comercio normalizado. Ejemplo:
 
 ```json
 "productRules": [
-  {"store": "Local Prueba", "category": "Lácteos", "keywords": ["leche", "yogur"]}
+  {"store": "Local Prueba", "category": "Limpieza", "keywords": ["detergente", "jabon"]}
 ]
 ```
 
-La primera regla aplicable tiene prioridad sobre la categoría del comercio. Memoria e historial siguen completando las categorías que ya aprendieron. La tabla acepta categorías escritas libremente; las sugerencias no limitan el campo. Un archivo inválido muestra un error y debe corregirse para continuar extrayendo.
+La primera regla aplicable tiene prioridad sobre la categoría del comercio. Memoria e historial conservan su prioridad para categorías admitidas. Al extraer, las antiguas `Lácteos`, `Almacén` y `Galletitas` se convierten a `Supermercado`; `Ferreteria` y otras categorías fuera del catálogo se convierten a `Otros`, sin modificar los archivos de aprendizaje. Los nombres con tildes o diferencias de mayúsculas se normalizan al catálogo. Un archivo de reglas inválido muestra un error y debe corregirse para continuar extrayendo.
 
 ## Límites de archivos
 

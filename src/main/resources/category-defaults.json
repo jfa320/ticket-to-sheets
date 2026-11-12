@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "fallback": "Supermercado",
-  "categories": ["Supermercado", "Lácteos", "Almacén", "Limpieza", "Perfumeria", "Ferreteria", "Panaderia", "Farmacia", "Verduleria", "Otros"],
+  "categories": ["Limpieza", "Supermercado", "Farmacia", "Kiosco", "Carne", "Otros", "Verduleria", "Perfumeria", "Panaderia"],
   "stores": {
     "Los Tres Corazones": "Supermercado",
     "PedidosYa Market - San Miguel II": "Supermercado",
     "Tienda Filipa": "Supermercado",
-    "Ferreteria Tribulato": "Ferreteria",
+    "Ferreteria Tribulato": "Otros",
     "Perfumerias Pigmento": "Perfumeria",
     "Central de Sabores": "Panaderia",
     "Estancia San Francisco": "Otros",

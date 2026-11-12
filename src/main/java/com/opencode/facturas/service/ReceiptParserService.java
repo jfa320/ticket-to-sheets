@@ -45,9 +45,10 @@ public class ReceiptParserService {
     private static final Set<String> NON_BRAND_PREFIXES = Set.of(
             "articulo", "producto", "papel", "leche", "azucar", "harina", "arroz", "yerba", "galletitas",
             "galleta", "jabon", "manteca", "sal", "agua", "pan", "carne", "queso", "fideos", "detergente",
-            "suavizante", "limpiador", "bolsa", "almacen", "soporte", "trabuco", "generico", "salsa"
+            "suavizante", "limpiador", "bolsa", "almacen", "soporte", "trabuco", "generico", "salsa", "plafon", "piafon"
     );
     private static final List<ProductRule> PRODUCT_RULES = List.of(
+            new ProductRule("Plafon", List.of("piafon")),
             new ProductRule("Salchichas", List.of("salchi", "salchich")),
             new ProductRule("Galletitas", List.of("gallet", "gal let", "gal.let", "galleta")),
             new ProductRule("Pure de tomates", List.of("pure tom", "pure tomate", "pure de tom")),
@@ -183,6 +184,7 @@ public class ReceiptParserService {
         items.addAll(recoverFromMemory(memoryLines, storeName, date, warnings, items, memoryUncertainty));
         items.replaceAll(item -> applyLearned(item, storeName));
         if (sheetsHistory != null) items = new ArrayList<>(sheetsHistory.enrich(items, warnings));
+        items.replaceAll(this::canonicalCategory);
         String subtotal = totalCalculator.calculate(items);
         String discountTotal = totalCalculator.discounts(discounts);
         String total = totalCalculator.net(subtotal, discountTotal);
@@ -444,6 +446,14 @@ public class ReceiptParserService {
 
     private String categoryForStore(String storeName) {
         return categories.categoryFor(storeName, "");
+    }
+
+    private ReceiptItem canonicalCategory(ReceiptItem item) {
+        String category = categories.canonical(item.categoria());
+        if (category.equals(item.categoria())) return item;
+        return new ReceiptItem(item.descripcion(), item.marca(), item.lugarDeCompra(), category,
+                item.cantidad(), item.precioUnitario(), item.fecha(), item.estado(), item.firma(),
+                item.memorizado(), item.fuentesOcr());
     }
 
     private ReceiptItem applyLearned(ReceiptItem item, String storeName) {

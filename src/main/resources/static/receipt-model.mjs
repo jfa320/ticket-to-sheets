@@ -1,4 +1,5 @@
 import {zero, decimal, add, multiply, roundMoney, toNumber} from './receipt-decimal.mjs';
+import {canonicalCategory} from './category-suggestions.mjs';
 
 export const COLUMNS = [
     ['descripcion', 'Descripción'], ['marca', 'Marca'], ['lugarDeCompra', 'Lugar de compra'],
@@ -12,11 +13,11 @@ export function createReceipt(payload) {
     return {
         storeName: payload.storeName || '',
         date: payload.date || '',
-        category: payload.items.find(item => String(item.categoria ?? '').trim())?.categoria || 'Otros',
+        category: canonicalCategory(payload.items.find(item => String(item.categoria ?? '').trim())?.categoria),
         rawText: payload.rawText || '',
         warnings: Array.isArray(payload.warnings) ? [...payload.warnings] : [],
         discounts: Array.isArray(payload.discounts) ? payload.discounts.map(discount => ({...discount, usar: true})) : [],
-        items: payload.items.map(item => ({...item, usar: true}))
+        items: payload.items.map(item => ({...item, categoria: canonicalCategory(item.categoria), usar: true}))
     };
 }
 

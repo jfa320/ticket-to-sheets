@@ -117,11 +117,11 @@ try {
     await page.locator('#itemsBody tr').first().locator('[data-field="descripcion"]').fill('Leche editada E2E');
     await page.locator('#retryCorrections').waitFor({state:'visible'}); await page.locator('#retryCorrections').click();
     await message('learnStatus','guardadas');
-    await page.locator('#itemsBody tr').first().locator('[data-field="categoria"] input').fill('Personal E2E');
+    await page.locator('#itemsBody tr').first().locator('[data-field="categoria"] select').selectOption('Kiosco');
     await page.waitForFunction(()=>document.getElementById('learnStatus').textContent.includes('guardadas'));
     await page.waitForFunction(async()=> {
         const response=await fetch('/api/corrections'); const body=await response.json();
-        return body.entries.some(value=>value.categoria==='Personal E2E');
+        return body.entries.some(value=>value.categoria==='Kiosco');
     });
     await page.locator('#correctionsOpen').click();
     await page.locator('#learningPanel summary').click();
@@ -150,13 +150,14 @@ try {
     console.log('OK: corrección con reintento, respaldo, vista previa, cancelación y prioridad de la memoria local.');
 
     const categories=JSON.parse(await readFile(path.join(root,'src/main/resources/category-defaults.json'),'utf8'));
-    categories.categories.push('Categoría ficticia E2E'); categories.productRules=[{category:'Categoría ficticia E2E',keywords:['pan']}];
+    categories.productRules=[{category:'Panaderia',keywords:['pan']}];
     await writeFile(path.join(run,'data/categories.json'),JSON.stringify(categories));
     await page.reload(); await extract('receipt.png');
-    assert.ok((await page.locator('#categorySuggestions option').evaluateAll(options=>options.map(option=>option.value))).includes('Categoría ficticia E2E'));
-    assert.equal(await page.locator('#itemsBody tr').first().locator('[data-field="categoria"] input').inputValue(),'Personal E2E');
-    assert.equal(await page.locator('#itemsBody tr').nth(1).locator('[data-field="categoria"] input').inputValue(),'Categoría ficticia E2E');
-    console.log('OK: categorías locales, sugerencias y precedencia de correcciones aprendidas.');
+    assert.deepEqual(await page.locator('#itemsBody tr').first().locator('[data-field="categoria"] option')
+        .evaluateAll(options=>options.map(option=>option.value)), categories.categories);
+    assert.equal(await page.locator('#itemsBody tr').first().locator('[data-field="categoria"] select').inputValue(),'Kiosco');
+    assert.equal(await page.locator('#itemsBody tr').nth(1).locator('[data-field="categoria"] select').inputValue(),'Panaderia');
+    console.log('OK: nueve categorías permitidas, reglas locales y precedencia de correcciones aprendidas.');
 
     await page.waitForFunction(()=>!document.getElementById('sheetsAppend').disabled);
     await control({loseAppend:true,failStatus:1}); await page.locator('#sheetsAppend').click();
