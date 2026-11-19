@@ -323,7 +323,7 @@ class PedidosYaReceiptParserTest {
         assertEquals("PedidosYa Market - San Miguel II", response.storeName());
         assertEquals("9/10/" + LocalDate.now().getYear(), response.date());
         assertEquals(4, response.itemCount(), response.csv());
-        assertEquals(List.of("1.08", "1", "2", "1"), response.items().stream().map(item -> item.cantidad()).toList());
+        assertEquals(List.of("1,08", "1", "2", "1"), response.items().stream().map(item -> item.cantidad()).toList());
         assertEquals(List.of("949,50", "4577,50", "2139,00", "7206,75"), response.items().stream().map(item -> item.precioUnitario()).toList());
         assertEquals("17087,71", response.total());
         assertTrue(response.items().stream().allMatch(item -> response.date().equals(item.fecha())));

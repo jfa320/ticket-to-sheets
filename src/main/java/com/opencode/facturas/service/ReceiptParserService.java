@@ -428,7 +428,7 @@ public class ReceiptParserService {
                 brand,
                 storeName,
                 categories.categoryFor(storeName, descriptionWithoutBrand),
-                quantity,
+                quantity.replace('.', ','),
                 amounts.format(totalPrice / numericQuantity),
                 dateParser.normalize(date),
                 ambiguous ? "AMBIGUOUS" : "CORRECT",

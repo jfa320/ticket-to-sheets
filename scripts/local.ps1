@@ -4,6 +4,7 @@
     [ValidateRange(1, 3600)][int]$OcrStartupTimeoutSec = 300,
     [string]$Python = '',
     [ValidateRange(1, 65535)][int]$Port = 8080,
+    [ValidatePattern('^$|^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$')][string]$LocalName = '',
     [switch]$OpenBrowser
 )
 
@@ -14,10 +15,13 @@ $logRoot = Join-Path $repoRoot 'logs'
 $buildJar = Join-Path $repoRoot 'target/facturas-ocr-0.0.1-SNAPSHOT.jar'
 $runtimeRoot = Join-Path $logRoot 'runtime'
 $portRecord = Join-Path $logRoot 'app.port'
+$localNameRecord = Join-Path $logRoot 'app.local-name'
 New-Item -ItemType Directory -Force -Path $logRoot, $runtimeRoot | Out-Null
 
 function Get-LocalServiceProcess([int]$port, [string]$name) {
-    $listeners = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+    $listeners = if ($port -gt 0) {
+        @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+    } else { @() }
     $record = Join-Path $logRoot "$name.pid"
     $listeningIds = @($listeners | Select-Object -ExpandProperty OwningProcess)
     $ids = @($listeningIds)
@@ -35,11 +39,14 @@ function Get-LocalServiceProcess([int]$port, [string]$name) {
             $process.Name -in @('java.exe', 'javaw.exe') -and (
                 $command.Contains($runtimeRoot) -or $command.Contains($buildJar) -or
                 $command -match '-jar\s+"?target[\\/]facturas-ocr-0\.0\.1-SNAPSHOT\.jar"?(?:\s|$)')
-        } else {
+        } elseif ($name -eq 'ocr') {
             $process.Name -in @('python.exe', 'pythonw.exe') -and (
                 $command.Contains((Join-Path $repoRoot 'ocr/service.py')) -or
                 ((Test-Path -LiteralPath $record) -and $serviceId -eq $recordedId -and
                     $command -match '\bservice\.py(?:"|\s|$)'))
+        } else {
+            $process.Name -in @('python.exe', 'pythonw.exe') -and
+                $command.Contains((Join-Path $repoRoot 'scripts/local_dns.py'))
         }
         if (-not $belongs) {
             if ($listeningIds -contains $serviceId) {
@@ -85,14 +92,46 @@ function Get-OcrHealth {
     try { Invoke-RestMethod 'http://127.0.0.1:5000/health' -TimeoutSec 2 } catch { $null }
 }
 
+function Start-LocalDns([string]$name, [int]$appId, [int]$appPort) {
+    $dnsPython = Resolve-ProjectPython $repoRoot $Python
+    $dnsScript = Join-Path $repoRoot 'scripts/local_dns.py'
+    $dnsArguments = '-u "' + $dnsScript + '" --name ' + $name + ' --port ' + $appPort + ' --app-pid ' + $appId
+    $dnsProcess = Start-Process -FilePath $dnsPython -ArgumentList $dnsArguments -WorkingDirectory $repoRoot `
+        -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logRoot 'local-dns.log') `
+        -RedirectStandardError (Join-Path $logRoot 'local-dns-error.log') -PassThru
+    Set-Content -LiteralPath (Join-Path $logRoot 'dns.pid') -Value $dnsProcess.Id
+    for ($attempt = 0; $attempt -lt 15; $attempt++) {
+        if ($dnsProcess.HasExited) { throw 'El DNS local terminó. Revisá logs/local-dns-error.log.' }
+        if (Select-String -LiteralPath (Join-Path $logRoot 'local-dns.log') -SimpleMatch 'DNS local listo' -Quiet) {
+            Write-Host "Acceso en la red local: http://$name.local:$appPort"
+            return
+        }
+        Start-Sleep -Seconds 1
+    }
+    Stop-LocalService 0 'dns'
+    throw 'El DNS local no confirmó el arranque. Revisá logs/local-dns-error.log.'
+}
+
 Push-Location $repoRoot
 try {
     $explicitPort = $PSBoundParameters.ContainsKey('Port')
     $Port = Resolve-LocalAppPort $Port -UseSavedPort:($Action -eq 'Stop' -and -not $explicitPort)
     if ($Action -eq 'Stop') {
+        Stop-LocalService 0 'dns'
         Stop-LocalService $Port 'app'
         Stop-LocalService 5000 'ocr'
         return
+    }
+    if (-not $PSBoundParameters.ContainsKey('LocalName') -and (Test-Path -LiteralPath $localNameRecord)) {
+        $LocalName = (Get-Content -LiteralPath $localNameRecord -Raw).Trim()
+    }
+    $LocalName = $LocalName.ToLowerInvariant()
+    if ($LocalName) {
+        $dnsPython = Resolve-ProjectPython $repoRoot $Python
+        & $dnsPython -I -c 'import zeroconf' 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Para usar -LocalName, instalá scripts/requirements-local-dns.txt en el Python del OCR.'
+        }
     }
 
     # Legacy launchers execute target directly. Stop those instances before
@@ -140,6 +179,7 @@ try {
 
     $snapshotJar = Join-Path $runtimeRoot ('app-' + [guid]::NewGuid().ToString('N') + '.jar')
     Copy-Item -LiteralPath $buildJar -Destination $snapshotJar
+    Stop-LocalService 0 'dns'
     Stop-LocalService $Port 'app'
     # Java 17 on some Windows environments cannot connect AF_UNIX pipes.
     # A long temporary path selects the JDK's built-in TCP loopback fallback.
@@ -149,6 +189,7 @@ try {
         Join-Path $env:JAVA_HOME 'bin/java.exe'
     } else { (Get-Command java.exe -ErrorAction Stop).Source }
     $arguments = '"-Djdk.net.unixdomain.tmpdir=' + $socketRoot + '" -jar "' + $snapshotJar + '" --server.port=' + $Port
+    if ($LocalName) { $arguments += ' --server.address=0.0.0.0' }
     if (-not $env:APP_GOOGLE_REDIRECT_URI) {
         $arguments += ' --app.google.redirect-uri=http://localhost:' + $Port + '/api/sheets/oauth/callback'
     }
@@ -167,6 +208,12 @@ try {
         if ($response -and $response.StatusCode -eq 200) {
             $appUrl = "http://localhost:$Port"
             Write-Host "App lista: $appUrl"
+            if ($LocalName) {
+                Start-LocalDns $LocalName $appProcess.Id $Port
+                Set-Content -LiteralPath $localNameRecord -Value $LocalName
+            } elseif (Test-Path -LiteralPath $localNameRecord) {
+                Remove-Item -LiteralPath $localNameRecord
+            }
             if ($OpenBrowser) { Start-Process $appUrl }
             return
         }

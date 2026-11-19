@@ -1,0 +1,2 @@
+# Opcional para publicar facturas.local en la red local con scripts/local.ps1.
+zeroconf==0.154.0

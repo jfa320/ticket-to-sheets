@@ -25,6 +25,7 @@
 .sheets-settings-dialog::backdrop { background: rgba(15, 23, 42, 0.42); backdrop-filter: blur(2px); }
 .sheets-config { min-height: 100%; margin: 0; padding: 30px; border: 0; border-radius: 18px 0 0 18px; }
 .sheets-config h2 { margin-top: 0; }
+.settings-corrections { margin: 24px 0; padding-bottom: 24px; border-bottom: 1px solid var(--line); }
 .sheets-fields { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) 160px; gap: 16px; border: 0; padding: 0; margin: 20px 0; min-width: 0; }
 .sheets-field { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .sheets-field label { font-weight: 700; }
@@ -699,6 +700,10 @@ th {
     font-size: 0.75rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
+    white-space: nowrap;
+}
+
+.item-total-cell {
     white-space: nowrap;
 }
 

@@ -1,11 +1,11 @@
 import {
     createReceipt, buildExports, buildExportItems, formatTotal, validationErrors, toDateInputValue, formatDateForItems,
     calculateSummary, discountValidationErrors
-} from './receipt-model.mjs';
+} from './receipt-model.mjs?v=3';
 import {saveCorrections, validateFile} from './receipt-api.mjs?v=2';
 import {createReceiptExtraction} from './receipt-extraction.mjs?v=2';
 import {createCorrectionSaver} from './receipt-corrections.mjs?v=2';
-import {renderItems, renderWarnings, renderDiscounts, markInvalidCells} from './receipt-view.mjs?v=2';
+import {renderItems, renderWarnings, renderDiscounts, markInvalidCells} from './receipt-view.mjs?v=4';
 import {createOcrReview} from './ocr-review.mjs';
 import {createSheetsPanel} from './receipt-sheets.mjs?v=4';
 import {createCorrectionManager} from './correction-manager.mjs';

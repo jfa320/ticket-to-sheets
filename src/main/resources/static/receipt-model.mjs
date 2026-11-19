@@ -40,6 +40,17 @@ export function parseLocalizedNumber(value, options = {}) {
     return amount ? toNumber(amount) : null;
 }
 
+export function formatQuantity(value) {
+    const text = String(value ?? '');
+    return /^[+-]?\d*\.\d+$/.test(text.replace(/\s/g, '')) ? text.replace('.', ',') : text;
+}
+
+export function calculateItemTotal({cantidad, precioUnitario}) {
+    const quantity = localizedDecimal(cantidad, {quantity: true});
+    const price = localizedDecimal(precioUnitario);
+    return quantity && price ? toNumber(roundMoney(multiply(quantity, price))) : null;
+}
+
 function exactTotal(items) {
     return items.filter(item => item.usar !== false).reduce((sum, item) => {
         const price = localizedDecimal(item.precioUnitario);
@@ -93,7 +104,8 @@ export function buildExportItems(items, discounts = [], context = {}) {
 
 export function buildExports(items, discounts = [], context = {}) {
     const selected = buildExportItems(items, discounts, context).filter(item => item.usar !== false);
-    const rows = selected.map(item => COLUMNS.map(([field]) => item[field]));
+    const rows = selected.map(item => COLUMNS.map(([field]) =>
+        field === 'cantidad' ? formatQuantity(item[field]) : item[field]));
     const withHeader = [COLUMNS.map(([, label]) => label), ...rows];
     const join = (values, delimiter) => values
         .map(row => row.map(value => escapeDelimited(value, delimiter)).join(delimiter)).join('\n');

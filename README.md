@@ -18,7 +18,7 @@ En lectura rápida, un JPEG validado se envía directamente al OCR: evita conver
 - calcula totales con decimales exactos y el mismo redondeo en Java y JavaScript, incluidas cantidades fraccionarias y bonificaciones.
 
 - permite abrir el recorte de una fila con “Ver en imagen”, filtrar filas ambiguas pendientes y marcarlas como revisadas. Editar una fila reabre su revisión; el estado OCR y la memoria permanecen visibles.
-- ofrece “Administrar correcciones aprendidas”: búsqueda por comercio/texto, edición y eliminación individual. Los cambios afectan futuras extracciones. Si otra edición modificó la misma entrada, pide recargarla antes de guardar.
+- ofrece “Administrar correcciones aprendidas” dentro del engranaje de Configuración: búsqueda por comercio/texto, edición y eliminación individual. Los cambios afectan futuras extracciones. Si otra edición modificó la misma entrada, pide recargarla antes de guardar.
 - permite descargar y restaurar un respaldo de correcciones y marcas desde ese diálogo, con vista previa y prioridad para los datos locales.
 - muestra fase y página durante la extracción y permite cancelarla conservando el ticket anterior. También muestra recortes de PDFs con texto digital.
 - permite configurar categorías y reglas por producto/comercio desde un JSON local, manteniendo la edición libre por fila.
@@ -76,7 +76,8 @@ Para medir precisión y tiempos, ver [la guía de evaluación](docs/OCR_EVALUATI
 - genera dos salidas:
   - formato con `|` para guardar o copiar
   - formato tabulado sin encabezado para pegar directo en Google Sheets
-- muestra una tabla editable para corregir o eliminar filas antes de copiar
+- muestra una tabla editable para corregir o eliminar filas antes de copiar, con un total por fila que se actualiza al cambiar la cantidad o el precio unitario
+- muestra y exporta las cantidades fraccionarias con coma decimal, por ejemplo `0,875`
 - conserva el ticket actual y sus ediciones mientras procesa otro archivo; si la nueva extracción falla, mantiene el total, las salidas y la revisión OCR anteriores
 - avisa antes de cerrar o recargar la página si el ticket no se copió ni se cargó correctamente, o si después hubo cambios pendientes
 - cancela la extracción en curso al recargar o salir de la página; descarta el resultado anterior y permite procesar otra factura. Si PaddleOCR está dentro de una llamada nativa, espera su finalización y no inicia más pasadas ni páginas del trabajo cancelado
@@ -150,6 +151,24 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local.ps1
 ```
 
 Abrí `http://<IP-local-de-la-PC>:8080` desde un dispositivo de la misma red y permití TCP 8080 en el firewall solo desde esa subred. El OCR permanece en `127.0.0.1:5000`. La extracción y los reintentos de Sheets funcionan por HTTP local sin depender de `crypto.randomUUID` ni de `crypto.subtle`. Los botones de copiar usan una alternativa por selección de texto si el navegador restringe el portapapeles moderno en HTTP. Si también bloquea esa alternativa, se informa el error y se puede seleccionar y copiar el texto de salida manualmente.
+
+Para usar un nombre fácil en Windows, instalá la dependencia opcional en el mismo Python del OCR y activá el alias local.
+
+```powershell
+.venv\Scripts\python.exe -m pip install -r scripts/requirements-local-dns.txt
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local.ps1 -LocalName facturas
+```
+
+La app se abre en `http://facturas.local:8080` desde dispositivos del mismo Wi-Fi con soporte mDNS. `-LocalName` habilita la escucha de la app en la red local y se recuerda en `logs/app.local-name` para los siguientes arranques. `scripts/local_dns.py` anuncia la IP de la interfaz de salida, actualiza el anuncio si cambia la dirección y termina al cerrar la app. Para quitar el alias, ejecutá `& .\scripts\local.ps1 -LocalName ''` desde PowerShell. Para conectar una cuenta de Google Sheets, abrí la app desde `http://localhost:8080` en la PC que la ejecuta. La excepción de Google para orígenes HTTP solo cubre direcciones de loopback. [Configuración de Google Sheets](docs/GOOGLE_SHEETS.md).
+
+Para abrir `http://facturas.local` o `http://<IP-local-de-la-PC>` sin escribir el puerto, podés configurar una redirección de TCP 80 a la app en 8080. Ejecutá una vez estos comandos desde PowerShell como administrador, con el puerto 80 libre.
+
+```powershell
+netsh.exe interface portproxy add v4tov4 listenaddress=0.0.0.0 listenport=80 connectaddress=127.0.0.1 connectport=8080 protocol=tcp
+New-NetFirewallRule -Name 'ProyectoFacturas-HTTP-80-Local' -DisplayName 'ProyectoFacturas HTTP local (80)' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 80 -RemoteAddress LocalSubnet -Profile Any
+```
+
+La redirección se conserva al reiniciar Windows y requiere la app ejecutándose en 8080. La regla permite el acceso desde la subred local. También podés usar los enlaces con `:8080`. Para retirarla, ejecutá `netsh.exe interface portproxy delete v4tov4 listenaddress=0.0.0.0 listenport=80` y `Remove-NetFirewallRule -Name 'ProyectoFacturas-HTTP-80-Local'` como administrador. [Documentación de portproxy](https://learn.microsoft.com/windows-server/networking/technologies/netsh/netsh-interface-portproxy).
 
 ```bash
 mvn test

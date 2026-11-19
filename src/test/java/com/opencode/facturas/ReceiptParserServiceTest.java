@@ -482,7 +482,9 @@ class ReceiptParserServiceTest {
         ExtractResponse response = parserService.parse(raw);
 
         assertEquals("PedidosYa Market - San Miguel II", response.storeName());
-        assertTrue(response.csv().contains("Cebolla Selección|Genérico|PedidosYa Market - San Miguel II|Supermercado|0.9|888,91|"), response.csv());
+        assertEquals("0,9", response.items().get(0).cantidad());
+        assertTrue(response.csv().contains("Cebolla Selección|Genérico|PedidosYa Market - San Miguel II|Supermercado|0,9|888,91|"), response.csv());
+        assertTrue(response.tsvWithoutHeader().contains("\t0,9\t888,91\t"), response.tsvWithoutHeader());
         assertTrue(response.csv().contains("Agua Mineral Sierra De Los Padres Sin Gas 2 L|Sierra De Los Padres|PedidosYa Market - San Miguel II|Supermercado|1|1572,50|"), response.csv());
         assertTrue(response.csv().contains("Papas Air Fryer Mc Cain Más Finitas 700 G|McCain|PedidosYa Market - San Miguel II|Supermercado|2|5735,40|"), response.csv());
         assertTrue(response.csv().contains("Yogur Tregar Natural Entero Sin Azúcar 280 G|Tregar|PedidosYa Market - San Miguel II|Supermercado|1|3849,00|"), response.csv());
@@ -558,7 +560,7 @@ class ReceiptParserServiceTest {
 
         assertEquals("PedidosYa Market - San Miguel II", response.storeName());
         assertEquals(7, response.itemCount(), response.csv());
-        assertTrue(response.csv().contains("Cebolla Seleccion|Genérico|PedidosYa Market - San Miguel II|Supermercado|0.9|888,91|"), response.csv());
+        assertTrue(response.csv().contains("Cebolla Seleccion|Genérico|PedidosYa Market - San Miguel II|Supermercado|0,9|888,91|"), response.csv());
         assertTrue(response.csv().contains("Agua Mineral Sierra De Los Padres Sin Gas 2 L|Sierra De Los Padres|PedidosYa Market - San Miguel II|Supermercado|1|1572,50|"), response.csv());
         assertTrue(response.csv().contains("Papas Air Fryer Mc Cain Mas Finitas 700 G|McCain|PedidosYa Market - San Miguel II|Supermercado|2|5735,40|"), response.csv());
         assertTrue(response.csv().contains("Yogur Tregar Natural Entero Sin Azücar 280 G|Tregar|PedidosYa Market - San Miguel II|Supermercado|1|3849,00|"), response.csv());

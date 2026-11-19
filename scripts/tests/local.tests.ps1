@@ -92,6 +92,19 @@ try {
     if (@(Get-LocalServiceProcess 8082 'app').Count -ne 1) {
         throw 'No se reconoció una instancia propia en el puerto alternativo.'
     }
+    $dnsRecord = Join-Path $logRoot 'dns.pid'
+    $launcherProcesses[1204] = [pscustomobject]@{
+        ProcessId = 1204; Name = 'python.exe';
+        CommandLine = 'python.exe "' + (Join-Path $repoRoot 'scripts/local_dns.py') + '" --app-pid 1203'
+    }
+    Set-Content -LiteralPath $dnsRecord -Value 1204
+    if (@(Get-LocalServiceProcess 0 'dns').Count -ne 1) {
+        throw 'No se reconoció el anuncio DNS local sin puerto TCP propio.'
+    }
+    Set-Content -LiteralPath $dnsRecord -Value 1201
+    if (@(Get-LocalServiceProcess 0 'dns').Count -ne 0 -or (Test-Path -LiteralPath $dnsRecord)) {
+        throw 'El registro DNS confundió el OCR con el anuncio local.'
+    }
     if ((Resolve-LocalAppPort 9000) -ne 9000) {
         throw 'No se respetó un puerto personalizado libre.'
     }

@@ -79,6 +79,11 @@ try {
     const control=async data=>assert.equal((await context.request.post(`${origin}/__test__/control`,{data})).status(),200);
     const state=async()=> (await context.request.get(`${origin}/__test__/state`)).json();
     const message=async(id,text)=>page.waitForFunction(({id,text})=>document.getElementById(id).textContent.includes(text),{id,text});
+    const openCorrections=async()=> {
+        if(!await page.locator('#sheetsSettingsDialog').evaluate(dialog=>dialog.open))
+            await page.getByRole('button',{name:'Configuración',exact:true}).click();
+        await page.locator('#correctionsOpen').click();
+    };
     const extract=async filename=> {
         await page.locator('#fileInput').setInputFiles(path.join(fixtureFiles,filename));
         const [result]=await Promise.all([
@@ -88,7 +93,9 @@ try {
         assert.equal(result.status(),200,`Falló la extracción de ${filename}`);
         await page.locator('#cancelExtraction').waitFor({state:'hidden'}); return result.json();
     };
-    await page.goto(origin); await extract('receipt.png');
+    await page.goto(origin);
+    assert.equal(await page.locator('.hero #correctionsOpen').count(),0);
+    await extract('receipt.png');
     assert.equal(await page.locator('#itemsBody tr').count(),2);
     assert.match(await page.locator('#totalValue').innerText(),/1[.,]600/);
     await page.getByRole('button',{name:'Ver fila 1 en la imagen'}).click();
@@ -123,7 +130,7 @@ try {
         const response=await fetch('/api/corrections'); const body=await response.json();
         return body.entries.some(value=>value.categoria==='Kiosco');
     });
-    await page.locator('#correctionsOpen').click();
+    await openCorrections();
     await page.locator('#learningPanel summary').click();
     const [download]=await Promise.all([page.waitForEvent('download'),page.locator('#learningExport').click()]);
     const backupPath=path.join(run,'aprendizaje.json'); await download.saveAs(backupPath);
@@ -147,6 +154,9 @@ try {
     assert.ok(restored.corrections.some(value=>value.descripcion==='Producto importado ficticio'));
     assert.ok(restored.brands.includes('MarcaFicticiaE2E'));
     await page.locator('#correctionsClose').click();
+    assert.equal(await page.locator('#sheetsSettingsDialog').evaluate(dialog=>dialog.open),true);
+    assert.equal(await page.locator('#correctionsOpen').evaluate(button=>button===document.activeElement),true);
+    await page.locator('#sheetsSettingsClose').click();
     console.log('OK: corrección con reintento, respaldo, vista previa, cancelación y prioridad de la memoria local.');
 
     const categories=JSON.parse(await readFile(path.join(root,'src/main/resources/category-defaults.json'),'utf8'));
@@ -198,12 +208,13 @@ try {
     await page.setViewportSize({width:390,height:844});
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'La página móvil no debe tener desborde horizontal.');
     await page.screenshot({path:path.join(run,'mobile.png'),fullPage:true});
-    await page.locator('#correctionsOpen').click(); await page.locator('#learningPanel summary').click();
+    await openCorrections(); await page.locator('#learningPanel summary').click();
     await page.screenshot({path:path.join(run,'backup-mobile.png')});
-    await page.locator('#correctionsClose').click(); await page.setViewportSize({width:1440,height:1000});
+    await page.locator('#correctionsClose').click(); await page.locator('#sheetsSettingsClose').click();
+    await page.setViewportSize({width:1440,height:1000});
     const seeded=await context.request.post(`${origin}/api/corrections`,{data:{store:'AUXILIAR FICTICIO',
         corrections:Array.from({length:26},(_,i)=>({firma:`producto ficticio ${i}`,descripcion:`Producto ${i}`,marca:'Genérico',categoria:'Prueba'}))}});
-    assert.equal(seeded.status(),200); await page.locator('#correctionsOpen').click();
+    assert.equal(seeded.status(),200); await openCorrections();
     await page.waitForFunction(()=>!document.getElementById('correctionsFields').disabled);
     const adminInput=page.locator('#correctionsList form').first().getByLabel('Descripción',{exact:true});
     const beforeEdit=await adminInput.inputValue(); await adminInput.fill('Edición pendiente E2E');
@@ -211,15 +222,16 @@ try {
     assert.equal(await adminInput.inputValue(),'Edición pendiente E2E');
     await page.keyboard.press('Escape'); await page.locator('#correctionsDiscard').click();
     await page.locator('#correctionsDialog').waitFor({state:'hidden'});
-    await page.locator('#correctionsOpen').click();
+    await openCorrections();
     await page.waitForFunction(()=>!document.getElementById('correctionsFields').disabled);
     assert.equal(await adminInput.inputValue(),beforeEdit);
     await adminInput.fill('Edición guardada E2E'); await page.locator('#correctionsClose').click();
     await page.locator('#correctionsSaveAll').click(); await page.locator('#correctionsDialog').waitFor({state:'hidden'});
-    await page.locator('#correctionsOpen').click();
+    await openCorrections();
     await page.waitForFunction(()=>!document.getElementById('correctionsFields').disabled);
     assert.equal(await adminInput.inputValue(),'Edición guardada E2E');
     await page.locator('#correctionsClose').click(); assert.deepEqual(pageErrors,[]);
+    await page.locator('#sheetsSettingsClose').click();
     console.log('OK: pegado real de imagen, filtros, teclado, PDF multipágina y protección de ediciones administrativas.');
     console.log('OK: PDF digital con recorte, progreso real, cancelación y extracción posterior.');
 

@@ -1,4 +1,4 @@
-import {COLUMNS, parseLocalizedNumber} from './receipt-model.mjs';
+import {COLUMNS, calculateItemTotal, formatQuantity, formatTotal, parseLocalizedNumber} from './receipt-model.mjs?v=3';
 import {createCategorySelect} from './category-suggestions.mjs';
 
 function rowAction(label, rowNumber, icon) {
@@ -63,8 +63,16 @@ export function renderItems(items, body, {onEdit, onSelect, onRemove, onReview, 
     items.forEach((item, index) => {
         if (pendingOnly && (item.estado !== 'AMBIGUOUS' || item.revisado)) return;
         const row = document.createElement('tr');
+        const totalCell = document.createElement('td');
+        totalCell.className = 'item-total-cell';
+        totalCell.dataset.label = 'Total';
+        function updateTotal() {
+            const total = calculateItemTotal(item);
+            totalCell.textContent = total === null ? '—' : formatTotal(total);
+        }
         function edited(field, value) {
             onEdit(item, field, value);
+            if (field === 'cantidad' || field === 'precioUnitario') updateTotal();
             row.querySelector('.status-reviewed')?.remove();
             const toggle = row.querySelector('[data-review-toggle]');
             if (toggle) {
@@ -101,7 +109,7 @@ export function renderItems(items, body, {onEdit, onSelect, onRemove, onReview, 
                 input.addEventListener('change', () => edited(field, input.value));
                 cell.append(input);
             } else {
-                cell.textContent = item[field] ?? '';
+                cell.textContent = field === 'cantidad' ? formatQuantity(item[field]) : (item[field] ?? '');
                 cell.contentEditable = 'plaintext-only';
                 cell.setAttribute('role', 'textbox');
                 cell.setAttribute('aria-label', `${label}, fila ${index + 1}`);
@@ -111,9 +119,18 @@ export function renderItems(items, body, {onEdit, onSelect, onRemove, onReview, 
                     if (event.key === 'Enter') { event.preventDefault(); cell.blur(); }
                 });
                 cell.addEventListener('input', () => edited(field, cell.textContent.trim()));
+                if (field === 'cantidad') {
+                    cell.addEventListener('blur', () => {
+                        const formatted = formatQuantity(cell.textContent);
+                        if (formatted !== cell.textContent) cell.textContent = formatted;
+                    });
+                }
             }
             row.append(cell);
         }
+
+        updateTotal();
+        row.append(totalCell);
 
         const stateCell = document.createElement('td');
         stateCell.dataset.label = 'Estado';

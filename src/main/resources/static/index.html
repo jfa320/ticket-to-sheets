@@ -8,18 +8,17 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/styles.css?v=16">
+    <link rel="stylesheet" href="/styles.css?v=18">
 </head>
 <body>
 <main class="shell">
     <section class="hero">
-        <button id="sheetsSettingsOpen" class="settings-open" type="button" aria-label="Configuración de Google Sheets" aria-haspopup="dialog" aria-controls="sheetsSettingsDialog" title="Configuración de Google Sheets">
+        <button id="sheetsSettingsOpen" class="settings-open" type="button" aria-label="Configuración" aria-haspopup="dialog" aria-controls="sheetsSettingsDialog" title="Configuración">
             <svg aria-hidden="true" width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.07-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.61-.22l-2.39.96a7.28 7.28 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.88 2h-3.76a.5.5 0 0 0-.49.42l-.36 2.54a7.28 7.28 0 0 0-1.63.94l-2.39-.96a.5.5 0 0 0-.61.22L2.72 8.48a.5.5 0 0 0 .12.64l2.03 1.58a7.93 7.93 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .61.22l2.39-.96c.5.39 1.04.7 1.63.94l.36 2.54a.5.5 0 0 0 .49.42h3.76a.5.5 0 0 0 .49-.42l.36-2.54c.59-.24 1.13-.55 1.63-.94l2.39.96a.5.5 0 0 0 .61-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58Z"/><circle cx="12" cy="12" r="3.5"/></svg>
         </button>
         <p class="eyebrow">Carga simple de facturas</p>
         <h1>Subí una factura y cargá sus productos en Google Sheets.</h1>
         <p class="lead">Subí una imagen o PDF, revisá los datos y envialos a tu planilla con un botón.</p>
-        <button id="correctionsOpen" type="button" aria-haspopup="dialog" aria-controls="correctionsDialog">Administrar correcciones aprendidas</button>
         <ol class="flow-steps" aria-label="Flujo de trabajo">
             <li class="flow-step flow-step-active">Cargar</li>
             <li class="flow-step">Revisar</li>
@@ -30,8 +29,19 @@
     <dialog id="sheetsSettingsDialog" class="sheets-settings-dialog" aria-labelledby="sheetsConfigTitle">
     <section class="panel sheets-config" aria-labelledby="sheetsConfigTitle">
         <div class="output-header">
+            <h2 id="sheetsConfigTitle">Configuración</h2>
+            <button id="sheetsSettingsClose" class="link-button" type="button">Cerrar</button>
+        </div>
+        <section class="settings-corrections" aria-labelledby="settingsCorrectionsTitle">
+            <h3 id="settingsCorrectionsTitle">Correcciones aprendidas</h3>
+            <p class="sheets-help">Revisá y editá lo que la aplicación aprendió de tus tickets, o administrá su respaldo.</p>
+            <div class="sheets-config-actions">
+                <button id="correctionsOpen" class="secondary-action" type="button" aria-haspopup="dialog" aria-controls="correctionsDialog">Administrar correcciones aprendidas</button>
+            </div>
+        </section>
+        <div class="output-header">
             <div>
-                <h2 id="sheetsConfigTitle">Destino de Google Sheets</h2>
+                <h3>Destino de Google Sheets</h3>
                 <span>Elegí la planilla, su año y cómo se asocia cada mes con las pestañas.</span>
             </div>
             <a id="sheetsDestinationLink" class="sheets-link hidden" target="_blank" rel="noopener noreferrer">Abrir planilla</a>
@@ -66,7 +76,6 @@
             <div class="sheets-config-actions">
                 <button id="sheetsSave" type="submit">Guardar configuración</button>
                 <button id="sheetsCheck" class="secondary-action" type="button" disabled>Comprobar conexión</button>
-                <button id="sheetsSettingsClose" class="link-button" type="button">Cerrar</button>
             </div>
         </form>
         <p id="sheetsConfigStatus" class="sheets-feedback" role="status" aria-live="polite" aria-atomic="true"></p>
@@ -263,6 +272,7 @@
                         <th>Cantidad</th>
                         <th>Unitario</th>
                         <th>Fecha</th>
+                        <th class="item-total-cell">Total</th>
                         <th>Estado</th>
                         <th>Acciones</th>
                     </tr>
@@ -334,6 +344,6 @@
     <div id="filePreviewContent" class="file-preview-content"></div>
 </dialog>
 
-<script type="module" src="/app.js?v=25"></script>
+<script type="module" src="/app.js?v=27"></script>
 </body>
 </html>

@@ -18,3 +18,17 @@ test('excluded or invalid values do not contribute to totals', () => {
         {cantidad:'invalid',precioUnitario:'9'}], [{importe:'-9',usar:false},{importe:'invalid'},{importe:'3'}]),
         {subtotal:0,discountTotal:0,total:0});
 });
+
+test('exports use a comma for fractional quantities without rounding', () => {
+    const items = [
+        {cantidad: '0.8750', precioUnitario: '1000,00'},
+        {cantidad: '0,125', precioUnitario: '1000,00'},
+        {cantidad: 2, precioUnitario: '1000,00'}
+    ];
+    const output = buildExports(items);
+    const quantities = ['0,8750', '0,125', '2'];
+    assert.deepEqual(output.pipe.split('\n').slice(1).map(row => row.split('|')[4]), quantities);
+    assert.deepEqual(output.tsv.split('\n').slice(1).map(row => row.split('\t')[4]), quantities);
+    assert.deepEqual(output.rowsOnly.split('\n').map(row => row.split('\t')[4]), quantities);
+    assert.equal(output.total, 3000);
+});
